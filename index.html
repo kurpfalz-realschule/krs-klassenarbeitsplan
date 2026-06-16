@@ -152,9 +152,18 @@ a{color:var(--primary);text-decoration:none}
 .loading-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;color:var(--text-light)}
 
 /* Toast */
-.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1e293b;color:#fff;padding:12px 24px;border-radius:var(--radius);font-size:.9rem;z-index:500;animation:fadeIn .3s;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1e293b;color:#fff;padding:12px 24px;border-radius:var(--radius);font-size:.9rem;z-index:500;animation:fadeIn .3s;box-shadow:0 4px 12px rgba(0,0,0,.2);display:flex;align-items:center;gap:14px;max-width:92vw}
 .toast.error{background:var(--warn)}
 .toast.success{background:#16a34a}
+.toast-action{background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.55);padding:5px 12px;border-radius:6px;font-size:.82rem;font-weight:600;cursor:pointer;white-space:nowrap;min-height:var(--touch-min)}
+.toast-action:hover{background:rgba(255,255,255,.32)}
+
+/* Prüfungsdichte-Ampel */
+.dichte-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle;box-shadow:0 0 0 1px rgba(255,255,255,.45)}
+.dichte-dot.gruen{background:#22c55e}
+.dichte-dot.gelb{background:#facc15}
+.dichte-dot.rot{background:#f87171}
+.dichte-dot.leer{background:rgba(255,255,255,.3);box-shadow:none}
 
 /* Sidebar Menu */
 .sidebar-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:150;animation:fadeIn .2s}
@@ -243,9 +252,15 @@ const CONFIG = {
   // Google Apps Script Web-App URL - hier die eigene URL eintragen nach Deployment
   GAS_URL: 'https://script.google.com/macros/s/AKfycbz4fhAOAJoenXvKBUN97jb4dMgRHOY05Jb0EltVPO3G0Mj5teklriCiCFbGheaSSI_EyQ/exec',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '1.0.0',
+  APP_VERSION: '1.1.0',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
   SCHOOL_YEAR: '2025/26',
+  // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
+  DICHTE: {
+    weights: { ka: 2, test: 1, nachschreiber: 0.5, sonst: 1 }, // sonst = GFS/Projekt
+    geballtPenalty: 1,                 // +1, wenn >=2 Leistungen an EINEM Tag liegen
+    thresholds: { gelb: 3, rot: 5 },   // score < gelb => grün; >= rot => rot
+  },
 };
 
 // ===== Static Data (Fallback wenn GAS nicht erreichbar) =====
@@ -520,6 +535,31 @@ const Store = {
     return buch.filter(b => b.art === 'KA').length; // Nur reguläre KA zählen (NVO), nicht Nachschreiber
   },
 
+  // Prüfungsdichte einer Klasse in einer Woche (über die harte NVO-Regel hinaus)
+  getDichte(monday, klasse) {
+    const buch = this.getBuchungenForWeek(monday, klasse);
+    let ka = 0, test = 0, ns = 0, sonst = 0;
+    const perDay = {};
+    buch.forEach(b => {
+      if (b.art === 'KA') ka++;
+      else if (b.art === 'Test' || b.art === 'VocTest') test++;
+      else if (b.art === 'Nachschreiber') ns++;
+      else sonst++; // GFS, Projekt
+      if (b.art !== 'Nachschreiber') perDay[b.datum] = (perDay[b.datum] || 0) + 1;
+    });
+    const W = CONFIG.DICHTE.weights;
+    let score = ka * W.ka + test * W.test + ns * W.nachschreiber + sonst * W.sonst;
+    const geballt = Object.values(perDay).some(n => n >= 2);
+    if (geballt) score += CONFIG.DICHTE.geballtPenalty;
+    const total = ka + test + ns + sonst;
+    const t = CONFIG.DICHTE.thresholds;
+    let level = 'gruen';
+    if (total === 0) level = 'leer';
+    else if (score >= t.rot) level = 'rot';
+    else if (score >= t.gelb) level = 'gelb';
+    return { ka, test, ns, sonst, total, score, geballt, level };
+  },
+
   // Validation
   validate(buchung, excludeId = null) {
     const warnings = [];
@@ -575,6 +615,30 @@ const Store = {
 
       if (weekCount + 1 > maxKa) {
         errors.push(`Zu viele KA in dieser Woche für ${klasse}: ${weekCount + 1} geplant, max. ${maxKa} erlaubt (NVO BW). Bitte anderen Termin wählen.`);
+      }
+    }
+
+    // 4b. KA an benachbartem Schultag (Vortag/Folgetag) — Warnung, nicht blockierend
+    if (buchung.art === 'KA') {
+      const hasKaOn = (dStr) => this.buchungen.some(b =>
+        b.id !== excludeId && b.klasse === klasse && b.art === 'KA' && b.datum === dStr
+      );
+      const nachbarSchultag = (richtung) => {
+        let cur = new Date(dk);
+        for (let i = 0; i < 5; i++) {           // max. 5 Schritte (überspringt WE/Ferien)
+          cur = addDays(cur, richtung);
+          if (isWeekend(cur) || isHoliday(cur, this._ferien)) continue;
+          return dateKey(cur);
+        }
+        return null;
+      };
+      const vortag = nachbarSchultag(-1);
+      const folgetag = nachbarSchultag(1);
+      const treffer = [];
+      if (vortag && hasKaOn(vortag)) treffer.push('am Vortag');
+      if (folgetag && hasKaOn(folgetag)) treffer.push('am Folgetag');
+      if (treffer.length) {
+        warnings.push(`In ${klasse} liegt bereits ${treffer.join(' und ')} eine KA. Zwei KA an Folgetagen sind erlaubt, aber für die Schüler dicht.`);
       }
     }
 
@@ -797,12 +861,15 @@ if (Store._buchungen.length === 0) {
 // ===== Components =====
 
 // --- Toast ---
-function Toast({ message, type, onClose }) {
+function Toast({ message, type, action, onClose }) {
   useEffect(() => {
-    const t = setTimeout(onClose, 3000);
+    const t = setTimeout(onClose, action ? 6000 : 3000);
     return () => clearTimeout(t);
-  }, []);
-  return html`<div class="toast ${type || ''}">${message}</div>`;
+  }, [message]);
+  return html`<div class="toast ${type || ''}">
+    <span>${message}</span>
+    ${action ? html`<button class="toast-action" onClick=${() => action.onClick()}>${action.label}</button>` : ''}
+  </div>`;
 }
 
 // --- Login Screen ---
@@ -911,19 +978,22 @@ function BookingDialog({ datum, klasse, buchung, onClose, onSave, onDelete, show
     }
     const data = { datum: bDatum, klasse: bKlasse, fach: sanitize(fach), art, lehrkraft: sanitize(lehrkraft), notiz: sanitize(notiz) };
     if (isEdit) {
-      Store.updateBuchung(buchung.id, data);
-      showToast('Buchung aktualisiert', 'success');
+      const id = buchung.id;
+      const prev = { fach: buchung.fach, art: buchung.art, lehrkraft: buchung.lehrkraft, notiz: buchung.notiz, datum: buchung.datum, klasse: buchung.klasse, status: 'aktiv' };
+      Store.updateBuchung(id, data);
+      showToast('Buchung aktualisiert', 'success', { label: '↩ Rückgängig', onClick: () => { Store.updateBuchung(id, prev); showToast('Änderung rückgängig gemacht', ''); } });
     } else {
-      Store.addBuchung(data);
-      showToast('Buchung erstellt', 'success');
+      const created = Store.addBuchung(data);
+      showToast('Buchung erstellt', 'success', { label: '↩ Rückgängig', onClick: () => { Store.deleteBuchung(created.id); showToast('Buchung entfernt', ''); } });
     }
     onSave();
   };
 
   const handleDelete = () => {
     if (confirm('Buchung wirklich löschen?')) {
-      Store.deleteBuchung(buchung.id);
-      showToast('Buchung gelöscht', '');
+      const id = buchung.id;
+      Store.deleteBuchung(id);
+      showToast('Buchung gelöscht', '', { label: '↩ Rückgängig', onClick: () => { Store.updateBuchung(id, { status: 'aktiv' }); showToast('Löschen rückgängig gemacht', ''); } });
       onDelete();
     }
   };
@@ -1159,7 +1229,18 @@ function CalendarView({ onCellClick, onChipClick, visibleKlassen }) {
       <div class="calendar" style="grid-template-columns: 80px repeat(${klassen.length}, minmax(90px, 1fr))">
         <!-- Header Row -->
         <div class="cal-header day-col">Tag</div>
-        ${klassen.map(k => html`<div class="cal-header">${k}</div>`)}
+        ${klassen.map(k => {
+          const d = Store.getDichte(currentMonday, k);
+          const parts = [];
+          if (d.ka) parts.push(d.ka + ' KA');
+          if (d.test) parts.push(d.test + ' Test');
+          if (d.ns) parts.push(d.ns + ' Nachschr.');
+          if (d.sonst) parts.push(d.sonst + ' GFS/Proj.');
+          const tip = d.total
+            ? 'Prüfungsdichte ' + k + ': ' + parts.join(', ') + (d.geballt ? ' · geballt an einem Tag' : '')
+            : 'Keine Prüfungen in ' + k + ' diese Woche';
+          return html`<div class="cal-header"><span class="dichte-dot ${d.level}" title=${tip}></span>${k}</div>`;
+        })}
 
         <!-- Day Rows -->
         ${weekDates.map(date => {
@@ -1555,7 +1636,7 @@ function App() {
     return () => clearTimeout(timeout);
   }, [user]);
 
-  const showToast = (msg, type) => setToast({ message: msg, type });
+  const showToast = (msg, type, action) => setToast({ message: msg, type, action });
 
   const visibleKlassen = useMemo(() => {
     if (filterKlasse !== 'alle') return [filterKlasse];
@@ -1690,7 +1771,7 @@ function App() {
         />
       `}
 
-      ${toast && html`<${Toast} message=${toast.message} type=${toast.type} onClose=${() => setToast(null)} />`}
+      ${toast && html`<${Toast} message=${toast.message} type=${toast.type} action=${toast.action} onClose=${() => setToast(null)} />`}
     </div>
   `;
 }
