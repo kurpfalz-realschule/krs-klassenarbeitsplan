@@ -121,6 +121,8 @@ a{color:var(--primary);text-decoration:none}
 .login-card .subtitle{color:var(--text-light);font-size:.9rem;margin-bottom:24px}
 .login-card .form-group{text-align:left}
 .login-card .error-msg{color:var(--warn);font-size:.85rem;margin-top:8px}
+.login-note{font-size:.82rem;line-height:1.45;color:var(--text-light);background:#f4f7fb;border-radius:8px;padding:10px 12px;margin-bottom:14px;text-align:left}
+.login-note-warn{background:#fff4f4;color:var(--warn)}
 .pin-input{letter-spacing:8px;text-align:center;font-size:1.5rem;font-weight:700}
 
 /* ===== Print View ===== */
@@ -252,7 +254,7 @@ const CONFIG = {
   // Google Apps Script Web-App URL - hier die eigene URL eintragen nach Deployment
   GAS_URL: 'https://script.google.com/macros/s/AKfycbz4fhAOAJoenXvKBUN97jb4dMgRHOY05Jb0EltVPO3G0Mj5teklriCiCFbGheaSSI_EyQ/exec',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '1.1.0',
+  APP_VERSION: '1.2.0',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
   SCHOOL_YEAR: '2025/26',
   // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
@@ -473,6 +475,7 @@ const Store = {
   _listeners: new Set(),
   _lastSync: null,
   _user: null,
+  _hubHint: null,
 
   init() {
     // Load from localStorage cache
@@ -512,6 +515,12 @@ const Store = {
   get events() { return this._events; },
   get ferien() { return this._ferien; },
   get user() { return this._user; },
+
+  // Hub-Vorauswahl: der Hub kennt die Lehrkraft, hat aber KEIN GAS-Session-Token.
+  // Schreibzugriffe (create/update/delete) verlangen serverseitig ein Token,
+  // darum wird hier nur das Kuerzel vorbelegt - angemeldet wird per PIN.
+  get hubHint() { return this._hubHint; },
+  setHubHint(hint) { this._hubHint = hint; this.notify(); },
 
   setUser(user) {
     this._user = user;
@@ -819,8 +828,10 @@ const Store = {
 
 Store.init();
 
-// === Demo Data (wenn keine Buchungen vorhanden) ===
-if (Store._buchungen.length === 0) {
+// === Demo Data - NUR ohne Backend (lokale Vorschau) ===
+// Mit gesetzter GAS_URL laeuft die App produktiv: dann darf sie sich nicht
+// selbst mit erfundenen Lehrkraeften und Klassenarbeiten befuellen.
+if (!CONFIG.GAS_URL && Store._buchungen.length === 0) {
   const today = new Date();
   const monday = getMonday(today);
   const demoData = [
@@ -879,10 +890,26 @@ function LoginScreen({ onLogin }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const lehrkraefte = Store.lehrkraefte;
+  const hubHint = Store.hubHint;
+  // Kommt die Lehrkraft ueber die Hub-Kachel, ist ihr Kuerzel schon bekannt.
+  // Die Namensliste liefert der Server nur mit gueltigem Token. Beim allerersten
+  // Aufruf ist sie darum leer - dann wird das Kuerzel getippt statt ausgewaehlt.
+  // (Kein oeffentlicher Endpunkt mit Klarnamen: DSGVO-Datenminimierung.)
+  const listeDa = lehrkraefte.length > 0;
+  const hubBekannt = hubHint?.kuerzel && lehrkraefte.some(l => l.kuerzel === hubHint.kuerzel);
+  const hubUnbekannt = hubHint?.kuerzel && lehrkraefte.length > 0 && !hubBekannt;
+  const gewaehlt = lehrkraefte.find(l => l.kuerzel === kuerzel);
+  // hat_pin liefert das Backend (getStammdaten). Fehlt es (alte Backend-Version),
+  // bleibt der Hinweis aus - erstanmeldung ist dann nie true.
+  const erstanmeldung = gewaehlt && gewaehlt.hat_pin === false;
+
+  useEffect(() => {
+    if (hubHint?.kuerzel && !kuerzel && (hubBekannt || !listeDa)) setKuerzel(hubHint.kuerzel);
+  }, [hubBekannt, listeDa, hubHint?.kuerzel]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!kuerzel) { setError('Bitte Kürzel auswählen'); return; }
+    if (!kuerzel) { setError(listeDa ? 'Bitte Kürzel auswählen' : 'Bitte Kürzel eingeben'); return; }
     if (!pin || pin.length < 4) { setError('Bitte 4-stellige PIN eingeben'); return; }
     setLoading(true);
     setError('');
@@ -912,26 +939,44 @@ function LoginScreen({ onLogin }) {
         <img src="icons/logo-krs.png" alt="KRS Logo" class="login-logo" />
         <h1>Klassenarbeitsplan</h1>
         <p class="subtitle">${CONFIG.SCHOOL_NAME}</p>
+        ${hubBekannt && html`
+          <p class="login-note">Angemeldet als <strong>${hubHint.name}</strong>.
+          Zum Eintragen bitte einmal die PIN bestaetigen.</p>
+        `}
+        ${hubUnbekannt && html`
+          <p class="login-note login-note-warn">Dein Kuerzel <strong>${hubHint.kuerzel}</strong>
+          ist im Klassenarbeitsplan noch nicht hinterlegt. Bitte bei Norbert Kotzan melden -
+          danach funktioniert die Anmeldung.</p>
+        `}
         <form onSubmit=${handleSubmit}>
           <div class="form-group">
             <label>Lehrkraft-Kürzel</label>
-            <select value=${kuerzel} onChange=${e => setKuerzel(e.target.value)}>
-              <option value="">— Bitte wählen —</option>
-              ${lehrkraefte.length > 0
-                ? lehrkraefte.map(l => html`<option value=${l.kuerzel}>${l.kuerzel} — ${l.vorname} ${l.name}</option>`)
-                : KLASSEN.slice(0,5).map((_, i) => html`<option value=${'LK'+i}>LK${i}</option>`)
-              }
-            </select>
+            ${listeDa ? html`
+              <select value=${kuerzel} onChange=${e => setKuerzel(e.target.value)}>
+                <option value="">— Bitte wählen —</option>
+                ${lehrkraefte.map(l => html`<option value=${l.kuerzel}>${l.kuerzel} — ${l.vorname} ${l.name}</option>`)}
+              </select>
+            ` : html`
+              <input type="text" autocapitalize="off" autocorrect="off" spellcheck="false"
+                placeholder="z. B. Ktz"
+                value=${kuerzel} onInput=${e => setKuerzel(e.target.value.trim())} />
+              <p class="login-note" style="margin:8px 0 0">Dein Untis-Kürzel — dasselbe wie
+              im Stundenplan. Nach der ersten Anmeldung steht hier eine Auswahlliste.</p>
+            `}
           </div>
           ${CONFIG.GAS_URL ? html`
             <div class="form-group">
-              <label>PIN (4-stellig)</label>
+              <label>${erstanmeldung ? 'Neue PIN vergeben (4-stellig)' : 'PIN (4-stellig)'}</label>
               <input type="password" inputmode="numeric" maxlength="4" pattern="[0-9]*"
                 class="pin-input" placeholder="• • • •"
                 value=${pin} onInput=${e => setPin(e.target.value)} />
             </div>
+            ${erstanmeldung && html`
+              <p class="login-note">Erste Anmeldung: Die PIN, die du jetzt eingibst,
+              wird als deine PIN gespeichert.</p>
+            `}
             <button type="submit" class="btn btn-primary" style="width:100%;margin-top:8px" disabled=${loading}>
-              ${loading ? 'Prüfe...' : 'Anmelden'}
+              ${loading ? 'Prüfe...' : (erstanmeldung ? 'PIN festlegen & anmelden' : 'Anmelden')}
             </button>
           ` : html`
             <button type="button" class="btn btn-primary" style="width:100%;margin-top:8px"
@@ -1600,13 +1645,16 @@ function App() {
   useEffect(() => {
     const isInHub = window.parent !== window;
     const handleHubAuth = (event) => {
-      if (!event.origin.includes('benditot.github.io') && event.origin !== window.location.origin) return;
+      if (!event.origin.includes('kurpfalz-realschule.github.io') && event.origin !== window.location.origin) return;
       if (event.data?.type === 'KRS_HUB_AUTH' && event.data?.hub_verified) {
         const hubUser = event.data.user;
         if (hubUser?.kuerzel) {
-          const userObj = { kuerzel: hubUser.kuerzel, name: hubUser.lehrkraft_name || hubUser.display_name || hubUser.kuerzel, vorname: (hubUser.display_name || '').split(' ')[0] || '' };
-          Store.setUser(userObj);
-          setUser(userObj);
+          // KEIN setUser: ohne GAS-Token schlaegt jedes Speichern mit 401 fehl.
+          // Stattdessen Kuerzel vorbelegen, die PIN-Anmeldung holt das Token.
+          Store.setHubHint({
+            kuerzel: hubUser.kuerzel,
+            name: hubUser.lehrkraft_name || hubUser.display_name || hubUser.kuerzel
+          });
         }
       }
     };
