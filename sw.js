@@ -1,6 +1,6 @@
 // Service Worker — KRS Klassenarbeitsplan
 // Bei JEDEM Deploy hochzaehlen - sonst liefert der Cache die alte index.html weiter.
-const CACHE_NAME = 'krs-ka-v1.2.0';
+const CACHE_NAME = 'krs-ka-v1.3.0';
 const ASSETS = [
   './',
   './index.html',
@@ -21,7 +21,7 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
+      Promise.all(keys.filter(k => k.startsWith('krs-ka-') && k !== CACHE_NAME).map(k => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
 });

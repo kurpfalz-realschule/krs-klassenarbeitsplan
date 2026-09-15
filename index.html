@@ -254,9 +254,9 @@ const CONFIG = {
   // Google Apps Script Web-App URL - hier die eigene URL eintragen nach Deployment
   GAS_URL: 'https://script.google.com/macros/s/AKfycbz4fhAOAJoenXvKBUN97jb4dMgRHOY05Jb0EltVPO3G0Mj5teklriCiCFbGheaSSI_EyQ/exec',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '1.2.0',
+  APP_VERSION: '1.3.0',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
-  SCHOOL_YEAR: '2025/26',
+  SCHOOL_YEAR: '2026/27',
   // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
   DICHTE: {
     weights: { ka: 2, test: 1, nachschreiber: 0.5, sonst: 1 }, // sonst = GFS/Projekt
@@ -309,13 +309,21 @@ const ART_TYPEN = [
   { value: 'Projekt', label: 'Projektprüfung', color: 'ka-neben' },
 ];
 
-const FERIEN_BW_2025_26 = [
+// KRS-Schulkalender, abgerufen 15.09.2026 (ICS DTEND ist exklusiv).
+const FERIEN_KRS = [
   { von: '2025-10-27', bis: '2025-10-31', bezeichnung: 'Herbstferien' },
   { von: '2025-12-22', bis: '2026-01-05', bezeichnung: 'Weihnachtsferien' },
   { von: '2026-02-16', bis: '2026-02-20', bezeichnung: 'Faschingsferien' },
   { von: '2026-04-02', bis: '2026-04-14', bezeichnung: 'Osterferien' },
   { von: '2026-05-26', bis: '2026-06-05', bezeichnung: 'Pfingstferien' },
   { von: '2026-07-30', bis: '2026-09-12', bezeichnung: 'Sommerferien' },
+  { von: '2026-10-24', bis: '2026-11-01', bezeichnung: 'Herbstferien' },
+  { von: '2026-12-23', bis: '2027-01-10', bezeichnung: 'Weihnachtsferien' },
+  { von: '2027-02-06', bis: '2027-02-14', bezeichnung: 'Fastnachtsferien' },
+  { von: '2027-03-24', bis: '2027-04-04', bezeichnung: 'Osterferien' },
+  { von: '2027-05-06', bis: '2027-05-09', bezeichnung: 'Bewegliche Ferientage (Himmelfahrt)' },
+  { von: '2027-05-15', bis: '2027-05-30', bezeichnung: 'Pfingstferien' },
+  { von: '2027-07-29', bis: '2027-09-11', bezeichnung: 'Sommerferien' },
 ];
 
 // ===== Utility Functions =====
@@ -471,7 +479,7 @@ const Store = {
   _buchungen: [],
   _lehrkraefte: [],
   _events: [],
-  _ferien: [...FERIEN_BW_2025_26],
+  _ferien: [...FERIEN_KRS],
   _listeners: new Set(),
   _lastSync: null,
   _user: null,
@@ -486,7 +494,7 @@ const Store = {
         this._buchungen = data.buchungen || [];
         this._lehrkraefte = data.lehrkraefte || [];
         this._events = data.events || [];
-        if (data.ferien && data.ferien.length) this._ferien = data.ferien;
+        if (data.schoolYear === CONFIG.SCHOOL_YEAR && data.ferien?.length) this._ferien = data.ferien;
         this._lastSync = data.lastSync;
       }
       const user = localStorage.getItem('krs_ka_user');
@@ -501,6 +509,7 @@ const Store = {
         lehrkraefte: this._lehrkraefte,
         events: this._events,
         ferien: this._ferien,
+        schoolYear: CONFIG.SCHOOL_YEAR,
         lastSync: this._lastSync
       }));
     } catch(e) { console.warn('Cache save error:', e); }
@@ -904,7 +913,7 @@ function LoginScreen({ onLogin }) {
   const erstanmeldung = gewaehlt && gewaehlt.hat_pin === false;
 
   useEffect(() => {
-    if (hubHint?.kuerzel && !kuerzel && (hubBekannt || !listeDa)) setKuerzel(hubHint.kuerzel);
+    if (hubHint?.kuerzel && !kuerzel) setKuerzel(hubHint.kuerzel);
   }, [hubBekannt, listeDa, hubHint?.kuerzel]);
 
   const handleSubmit = async (e) => {
@@ -945,24 +954,20 @@ function LoginScreen({ onLogin }) {
         `}
         ${hubUnbekannt && html`
           <p class="login-note login-note-warn">Dein Kuerzel <strong>${hubHint.kuerzel}</strong>
-          ist im Klassenarbeitsplan noch nicht hinterlegt. Bitte bei Norbert Kotzan melden -
-          danach funktioniert die Anmeldung.</p>
+          fehlt in der gespeicherten Liste. Du kannst es trotzdem eingeben und dich anmelden.</p>
         `}
         <form onSubmit=${handleSubmit}>
           <div class="form-group">
             <label>Lehrkraft-Kürzel</label>
-            ${listeDa ? html`
-              <select value=${kuerzel} onChange=${e => setKuerzel(e.target.value)}>
-                <option value="">— Bitte wählen —</option>
-                ${lehrkraefte.map(l => html`<option value=${l.kuerzel}>${l.kuerzel} — ${l.vorname} ${l.name}</option>`)}
-              </select>
-            ` : html`
               <input type="text" autocapitalize="off" autocorrect="off" spellcheck="false"
+                list="lehrkraft-kuerzel"
                 placeholder="z. B. Ktz"
                 value=${kuerzel} onInput=${e => setKuerzel(e.target.value.trim())} />
+              <datalist id="lehrkraft-kuerzel">
+                ${lehrkraefte.map(l => html`<option value=${l.kuerzel}>${l.vorname} ${l.name}</option>`)}
+              </datalist>
               <p class="login-note" style="margin:8px 0 0">Dein Untis-Kürzel — dasselbe wie
-              im Stundenplan. Nach der ersten Anmeldung steht hier eine Auswahlliste.</p>
-            `}
+              im Stundenplan. Du kannst es eingeben oder aus den Vorschlägen wählen.</p>
           </div>
           ${CONFIG.GAS_URL ? html`
             <div class="form-group">
@@ -971,10 +976,8 @@ function LoginScreen({ onLogin }) {
                 class="pin-input" placeholder="• • • •"
                 value=${pin} onInput=${e => setPin(e.target.value)} />
             </div>
-            ${erstanmeldung && html`
-              <p class="login-note">Erste Anmeldung: Die PIN, die du jetzt eingibst,
-              wird als deine PIN gespeichert.</p>
-            `}
+            <p class="login-note">Beim ersten Anmelden eine eigene vierstellige PIN wählen.
+              Danach dieselbe PIN wieder verwenden.</p>
             <button type="submit" class="btn btn-primary" style="width:100%;margin-top:8px" disabled=${loading}>
               ${loading ? 'Prüfe...' : (erstanmeldung ? 'PIN festlegen & anmelden' : 'Anmelden')}
             </button>
