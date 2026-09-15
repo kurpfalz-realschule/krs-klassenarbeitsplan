@@ -1,5 +1,6 @@
 // Service Worker — KRS Klassenarbeitsplan
-const CACHE_NAME = 'krs-ka-v1';
+// Bei JEDEM Deploy hochzaehlen - sonst liefert der Cache die alte index.html weiter.
+const CACHE_NAME = 'krs-ka-v1.2.0';
 const ASSETS = [
   './',
   './index.html',
@@ -35,7 +36,22 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Assets: cache-first, fallback to network
+  // index.html / Navigation: network-first. Sonst sieht eine Lehrkraft mit
+  // installierter PWA nach einem Deploy weiter die alte Version.
+  if (event.request.mode === 'navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('/index.html')) {
+    event.respondWith(
+      fetch(event.request).then(response => {
+        if (response.ok) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+        }
+        return response;
+      }).catch(() => caches.match(event.request).then(c => c || caches.match('./index.html')))
+    );
+    return;
+  }
+
+  // Uebrige Assets: cache-first, fallback to network
   event.respondWith(
     caches.match(event.request).then(cached => {
       if (cached) return cached;
