@@ -1,6 +1,6 @@
 // Service Worker — KRS Klassenarbeitsplan
 // Bei JEDEM Deploy hochzaehlen - sonst liefert der Cache die alte index.html weiter.
-const CACHE_NAME = 'krs-ka-v1.3.0';
+const CACHE_NAME = 'krs-ka-v2.0.0';
 const ASSETS = [
   './',
   './index.html',
@@ -31,7 +31,7 @@ self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
   // API calls: network only
-  if (url.hostname === 'script.google.com') {
+  if (url.hostname.endsWith('.supabase.co') || event.request.method !== 'GET') {
     event.respondWith(fetch(event.request));
     return;
   }
