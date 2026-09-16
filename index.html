@@ -258,7 +258,7 @@ const CONFIG = {
   SUPABASE_URL: 'https://ooejsfixxiuobrpqgfqm.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZWpzZml4eGl1b2JycHFnZnFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMjQ5MDYsImV4cCI6MjA4OTYwMDkwNn0.GbAv-sB4B8nNE3IPfiYIjbkMKs0Aq03c_-TUcmFY_5s',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '2.1.0',
+  APP_VERSION: '2.2.0',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
   SCHOOL_YEAR: '2026/27',
   // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
@@ -311,6 +311,7 @@ const ART_TYPEN = [
   { value: 'GFS', label: 'GFS', color: 'ka-neben' },
   { value: 'Nachschreiber', label: 'Nachschreibtermin', color: 'ka' },
   { value: 'Projekt', label: 'Projektprüfung', color: 'ka-neben' },
+  { value: 'AuV', label: 'AuV (außerunterrichtliche Veranstaltung)', color: 'event' },
 ];
 
 // KRS-Schulkalender, abgerufen 15.09.2026 (ICS DTEND ist exklusiv).
@@ -433,9 +434,20 @@ function getFachGruppe(fachKuerzel) {
 
 function getChipClass(art, fachKuerzel, isException) {
   if (isException) return 'exception';
+  if (art === 'AuV') return 'event';
   if (art === 'Test' || art === 'VocTest') return 'test';
   if (getFachGruppe(fachKuerzel) === 'Hauptfach') return 'ka-haupt';
   return 'ka-neben';
+}
+
+function getBookingLabel(b, compact = false) {
+  if (b.art === 'AuV') return compact ? `AuV${b.notiz ? ': ' + b.notiz : ''}` : `AuV · ${b.notiz || 'Veranstaltung'}`;
+  return compact ? `${b.fach}(${b.lehrkraft})` : `${b.fach} ${b.art}`;
+}
+
+function getBookingTitle(b) {
+  if (b.art === 'AuV') return `AuV – ${b.notiz || 'außerunterrichtliche Veranstaltung'} (${b.lehrkraft})`;
+  return `${b.fach} ${b.art} (${b.lehrkraft})${b.notiz ? ' – ' + b.notiz : ''}`;
 }
 
 // Check if a booking is an exception (3rd+ KA in a week for its class)
@@ -520,6 +532,7 @@ const Store = {
     let ka = 0, test = 0, ns = 0, sonst = 0;
     const perDay = {};
     buch.forEach(b => {
+      if (b.art === 'AuV') return; // Veranstaltungen sind keine Prüfungsleistung
       if (b.art === 'KA') ka++;
       else if (b.art === 'Test' || b.art === 'VocTest') test++;
       else if (b.art === 'Nachschreiber') ns++;
@@ -761,6 +774,12 @@ function BookingDialog({ datum, klasse, buchung, onClose, onSave, onDelete, show
 
   const bDatum = buchung?.datum || dateKey(datum);
   const bKlasse = buchung?.klasse || klasse;
+  const isAuv = art === 'AuV';
+
+  useEffect(() => {
+    if (isAuv && fach !== 'AuV') setFach('AuV');
+    if (!isAuv && fach === 'AuV') setFach('');
+  }, [isAuv]);
 
   useEffect(() => {
     if (fach && art) {
@@ -772,6 +791,7 @@ function BookingDialog({ datum, klasse, buchung, onClose, onSave, onDelete, show
   const handleSave = async () => {
     if(saving || !canEdit) return;
     if(!fach) { showToast('Bitte Fach auswählen','error'); return; }
+    if(isAuv && !notiz.trim()) { showToast('Bitte Veranstaltung angeben','error'); return; }
     if(validation && !validation.valid) { showToast(validation.errors[0],'error'); return; }
     setSaving(true);
     try {
@@ -805,23 +825,6 @@ function BookingDialog({ datum, klasse, buchung, onClose, onSave, onDelete, show
           </div>
 
           <div class="form-group">
-            <label>Fach</label>
-            <select value=${fach} onChange=${e => setFach(e.target.value)}>
-              <option value="">— Fach wählen —</option>
-              <optgroup label="Hauptfächer">
-                ${FAECHER.filter(f => f.gruppe === 'Hauptfach').map(f =>
-                  html`<option value=${f.kuerzel}>${f.kuerzel} — ${f.name}</option>`
-                )}
-              </optgroup>
-              <optgroup label="Nebenfächer">
-                ${FAECHER.filter(f => f.gruppe === 'Nebenfach').map(f =>
-                  html`<option value=${f.kuerzel}>${f.kuerzel} — ${f.name}</option>`
-                )}
-              </optgroup>
-            </select>
-          </div>
-
-          <div class="form-group">
             <label>Art</label>
             <div class="radio-group">
               ${ART_TYPEN.map(t => html`
@@ -834,6 +837,25 @@ function BookingDialog({ datum, klasse, buchung, onClose, onSave, onDelete, show
             </div>
           </div>
 
+          ${!isAuv && html`
+            <div class="form-group">
+              <label>Fach</label>
+              <select value=${fach} onChange=${e => setFach(e.target.value)}>
+                <option value="">— Fach wählen —</option>
+                <optgroup label="Hauptfächer">
+                  ${FAECHER.filter(f => f.gruppe === 'Hauptfach').map(f =>
+                    html`<option value=${f.kuerzel}>${f.kuerzel} — ${f.name}</option>`
+                  )}
+                </optgroup>
+                <optgroup label="Nebenfächer">
+                  ${FAECHER.filter(f => f.gruppe === 'Nebenfach').map(f =>
+                    html`<option value=${f.kuerzel}>${f.kuerzel} — ${f.name}</option>`
+                  )}
+                </optgroup>
+              </select>
+            </div>
+          `}
+
           <div class="form-group">
             <label>Lehrkraft</label>
             <select value=${lehrkraft} disabled>
@@ -845,9 +867,9 @@ function BookingDialog({ datum, klasse, buchung, onClose, onSave, onDelete, show
           </div>
 
           <div class="form-group">
-            <label>Notiz (optional)</label>
+            <label>${isAuv ? 'Veranstaltung' : 'Notiz (optional)'}</label>
             <textarea value=${notiz} onInput=${e => setNotiz(e.target.value)}
-              placeholder="z.B. KA3 Brüche, Nachschreiber Maier..." />
+              placeholder=${isAuv ? 'z.B. Kirchenerkundung, Theaterbesuch, Wandertag …' : 'z.B. KA3 Brüche, Nachschreiber Maier …'} />
           </div>
 
           ${validation && html`
@@ -927,7 +949,7 @@ function PrintView({ type, filter, onClose }) {
                 <td>${formatDate(b.datum)}</td>
                 <td>${getKW(b.datum)}</td>
                 <td><strong>${b.klasse}</strong></td>
-                <td>${b.fach}</td>
+                <td>${b.art === 'AuV' ? '—' : b.fach}</td>
                 <td>${b.art}</td>
                 <td>${b.lehrkraft}</td>
                 <td>${b.notiz || '—'}</td>
@@ -1069,8 +1091,8 @@ function CalendarView({ onCellClick, onChipClick, visibleKlassen }) {
                     return html`
                     <span class="chip ${getChipClass(b.art, b.fach, exc)}"
                       onClick=${(e) => { e.stopPropagation(); onChipClick(b); }}
-                      title=${exc ? 'Ausnahme: 3+ KA in dieser Woche!' : ''}>
-                      ${exc ? '⚠ ' : ''}${b.fach} ${b.art}
+                      title=${exc ? 'Ausnahme: 3+ KA in dieser Woche!' : getBookingTitle(b)}>
+                      ${exc ? '⚠ ' : ''}${getBookingLabel(b)}
                       <span class="chip-teacher">(${b.lehrkraft})</span>
                     </span>
                   `})}
@@ -1149,8 +1171,8 @@ function MonthView({ onCellClick, onChipClick, visibleKlassen }) {
                     return html`
                       <span class="month-chip ${getChipClass(b.art, b.fach, exc)}"
                         onClick=${(e) => { e.stopPropagation(); onChipClick(b); }}
-                        title="${b.fach} ${b.art} (${b.lehrkraft})${b.notiz ? ' – ' + b.notiz : ''}">
-                        ${b.fach}(${b.lehrkraft})
+                        title=${getBookingTitle(b)}>
+                        ${getBookingLabel(b, true)}
                       </span>
                     `;
                   })}
@@ -1252,8 +1274,8 @@ function QuarterView({ onCellClick, onChipClick, visibleKlassen }) {
                     return html`
                       <span class="month-chip ${getChipClass(b.art, b.fach, exc)}"
                         onClick=${(e) => { e.stopPropagation(); onChipClick(b); }}
-                        title="${b.fach} ${b.art} (${b.lehrkraft})${b.notiz ? ' – ' + b.notiz : ''}">
-                        ${b.fach}(${b.lehrkraft})
+                        title=${getBookingTitle(b)}>
+                        ${getBookingLabel(b, true)}
                       </span>
                     `;
                   })}
@@ -1299,6 +1321,7 @@ function YearView({ onMonthClick, onDayClick, visibleKlassen }) {
         <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--ka-haupt)"></div> KA Hauptfach</div>
         <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--ka-neben)"></div> KA Nebenfach</div>
         <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--gold)"></div> Test</div>
+        <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--event)"></div> AuV</div>
         <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--exception)"></div> Ausnahme (3+ KA/Woche)</div>
         <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--holiday)"></div> Ferien</div>
       </div>
@@ -1348,14 +1371,13 @@ function YearView({ onMonthClick, onDayClick, visibleKlassen }) {
                   if (cell.empty) return html`<div class="mini-day empty"></div>`;
                   const dots = cell.bookings.slice(0, 4).map(b => {
                     const exc = isExceptionBooking(b);
-                    const cls = exc ? 'exception' : (b.art === 'Test' || b.art === 'VocTest') ? 'test'
-                      : getFachGruppe(b.fach) === 'Hauptfach' ? 'ka-haupt' : 'ka-neben';
+                    const cls = getChipClass(b.art, b.fach, exc);
                     return html`<div class="mini-dot ${cls}"></div>`;
                   });
                   return html`
                     <div class="mini-day ${cell.isToday ? 'today' : ''} ${cell.holiday ? 'holiday' : ''}"
                       onClick=${() => !cell.holiday && onDayClick(cell.date)}
-                      title="${cell.holiday ? getHolidayName(cell.date, Store.ferien) : cell.bookings.map(b => b.fach + ' ' + b.art + ' ' + b.klasse).join(', ')}">
+                      title=${cell.holiday ? getHolidayName(cell.date, Store.ferien) : cell.bookings.map(b => getBookingLabel(b) + ' ' + b.klasse).join(', ')}>
                       <span class="day-num">${cell.day}</span>
                       ${dots.length > 0 ? html`<div class="mini-day-dots">${dots}</div>` : ''}
                     </div>
