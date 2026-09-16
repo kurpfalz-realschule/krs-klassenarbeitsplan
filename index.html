@@ -258,7 +258,7 @@ const CONFIG = {
   SUPABASE_URL: 'https://ooejsfixxiuobrpqgfqm.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZWpzZml4eGl1b2JycHFnZnFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMjQ5MDYsImV4cCI6MjA4OTYwMDkwNn0.GbAv-sB4B8nNE3IPfiYIjbkMKs0Aq03c_-TUcmFY_5s',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '2.0.0',
+  APP_VERSION: '2.1.0',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
   SCHOOL_YEAR: '2026/27',
   // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
@@ -484,7 +484,7 @@ const Store = {
   clear() {
     this._epoch++;
     this._user = null; this._buchungen = []; this._lehrkraefte = [];
-    this._events = []; this._error = ''; this._loading = false;
+    this._events = []; this._error = ''; this._loading = false; this._readonly = false;
     this.notify();
   },
   subscribe(fn) { this._listeners.add(fn); return () => this._listeners.delete(fn); },
@@ -496,6 +496,7 @@ const Store = {
   get events() { return this._events; },
   get ferien() { return this._ferien; },
   get user() { return this._user; },
+  get readonly() { return !!this._readonly; },
 
   setUser(user) { this._user = user; this.notify(); },
   getBuchungenForDay(datum, klasse) {
@@ -668,7 +669,13 @@ const Store = {
       for (const r of [who,people,bookings,holidays]) if (r.error) throw r.error;
       if (epoch !== this._epoch) return false;
       const me = people.data.find(l => l.id === who.data);
-      if (!me?.kuerzel) throw new Error('Für dein Hub-Konto fehlt das offizielle Lehrerkürzel. Bitte bei Norbert melden.');
+      if (!me) throw new Error('Dein Hub-Konto wurde nicht gefunden. Bitte bei Norbert melden.');
+      // v2.1.0 — Ohne Lehrerkuerzel KEIN Fehler mehr, sondern Nur-Lesen.
+      // Das Sekretariat hat einen Hub-Zugang, legt aber keine Klassenarbeiten an
+      // (Norbert, 16.09.2026). Vorher flog hier eine Fehlermeldung, die zum
+      // Melden aufforderte, obwohl alles richtig eingerichtet war. Serverseitig
+      // entspricht das ka_private.is_viewer() (lesen) vs. is_member() (schreiben).
+      this._readonly = !me.kuerzel;
       this._lehrkraefte = people.data.filter(l=>l.kuerzel).map(l=>({...l,name:l.display_name,vorname:''}));
       this._user = {...me, name:me.display_name, vorname:'', rolle:me.role};
       this._buchungen = bookings.data.map(b=>this.mapBooking(b));
@@ -750,7 +757,7 @@ function BookingDialog({ datum, klasse, buchung, onClose, onSave, onDelete, show
   const [notiz, setNotiz] = useState(buchung?.notiz || '');
   const [validation, setValidation] = useState(null);
   const [saving, setSaving] = useState(false);
-  const canEdit = !buchung || buchung.user_id === Store.user?.id;
+  const canEdit = !Store.readonly && (!buchung || buchung.user_id === Store.user?.id);
 
   const bDatum = buchung?.datum || dateKey(datum);
   const bKlasse = buchung?.klasse || klasse;
@@ -1411,6 +1418,7 @@ function App() {
   return html`
     <div class="app">
       ${Store._error && html`<p role="alert" class="error-msg" style="padding:8px 16px;background:var(--warn-light);color:#991b1b">Daten konnten nicht aktualisiert werden: ${Store._error}</p>`}
+      ${Store.readonly && html`<p style="padding:8px 16px;background:var(--primary-light);border-radius:var(--radius);margin:8px 16px;font-size:.85rem">👁 Nur-Lese-Ansicht — du siehst den vollständigen Plan. Klassenarbeiten eintragen können die unterrichtenden Lehrkräfte.</p>`}
       <div class="header">
         <img src="icons/logo-krs.png" alt="KRS" class="header-logo" />
         <h1>Klassenarbeitsplan</h1>
@@ -1436,10 +1444,11 @@ function App() {
             html`<option value=${l.kuerzel}>${l.kuerzel} — ${l.name}</option>`
           )}
         </select>
+        ${!Store.readonly && html`
         <button class="btn btn-sm btn-primary"
           onClick=${() => setDialog({ datum: new Date(), klasse: filterKlasse !== 'alle' && !filterKlasse.startsWith('stufe') ? filterKlasse : '5a' })}>
           + Neue Buchung
-        </button>
+        </button>`}
         <div class="view-switcher">
           <button class=${viewMode === 'week' ? 'active' : ''} onClick=${() => setViewMode('week')}>Woche</button>
           <button class=${viewMode === 'month' ? 'active' : ''} onClick=${() => setViewMode('month')}>Monat</button>
@@ -1458,7 +1467,7 @@ function App() {
             }
             return [filterKlasse];
           })()}
-          onCellClick=${(datum, klasse) => setDialog({ datum, klasse })}
+          onCellClick=${(datum, klasse) => { if (!Store.readonly) setDialog({ datum, klasse }); }}
           onChipClick=${(buchung) => setDialog({ datum: buchung.datum, klasse: buchung.klasse, buchung })}
         />
       `}
@@ -1473,7 +1482,7 @@ function App() {
             }
             return [filterKlasse];
           })()}
-          onCellClick=${(datum, klasse) => setDialog({ datum, klasse })}
+          onCellClick=${(datum, klasse) => { if (!Store.readonly) setDialog({ datum, klasse }); }}
           onChipClick=${(buchung) => setDialog({ datum: buchung.datum, klasse: buchung.klasse, buchung })}
         />
       `}
@@ -1488,7 +1497,7 @@ function App() {
             }
             return [filterKlasse];
           })()}
-          onCellClick=${(datum, klasse) => setDialog({ datum, klasse })}
+          onCellClick=${(datum, klasse) => { if (!Store.readonly) setDialog({ datum, klasse }); }}
           onChipClick=${(buchung) => setDialog({ datum: buchung.datum, klasse: buchung.klasse, buchung })}
         />
       `}
