@@ -117,6 +117,11 @@ a{color:var(--primary);text-decoration:none}
 .btn-danger{background:var(--warn);color:#fff}.btn-danger:hover{background:#dc2626}
 .btn-sm{padding:6px 12px;font-size:.8rem;min-height:32px}
 
+/* ===== Boot/Loading Screen (v2.3.0) ===== */
+.boot-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;min-height:100vh;color:var(--text-light);font-size:.95rem}
+.boot-spinner{width:32px;height:32px;border:3px solid #dbe3ee;border-top-color:var(--primary);border-radius:50%;animation:boot-spin .8s linear infinite}
+@keyframes boot-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.boot-spinner{animation:none}}
 /* ===== Login Screen ===== */
 .login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;background:linear-gradient(135deg,var(--primary) 0%,var(--primary-dark) 60%,var(--accent-dark) 100%)}
 .login-card{background:#fff;border-radius:16px;padding:40px 32px;width:100%;max-width:360px;box-shadow:0 20px 60px rgba(0,0,0,.2);text-align:center}
@@ -244,7 +249,7 @@ a{color:var(--primary);text-decoration:none}
 </style>
 </head>
 <body>
-<div id="app"></div>
+<div id="app"><div class="boot-screen" role="status"><div class="boot-spinner" aria-hidden="true"></div><p>Klassenarbeitsplan wird geladen …</p></div></div>
 
 <script type="module">
 // ===== Imports =====
@@ -258,7 +263,7 @@ const CONFIG = {
   SUPABASE_URL: 'https://ooejsfixxiuobrpqgfqm.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZWpzZml4eGl1b2JycHFnZnFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMjQ5MDYsImV4cCI6MjA4OTYwMDkwNn0.GbAv-sB4B8nNE3IPfiYIjbkMKs0Aq03c_-TUcmFY_5s',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '2.2.0',
+  APP_VERSION: '2.3.0',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
   SCHOOL_YEAR: '2026/27',
   // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
@@ -332,8 +337,25 @@ const FERIEN_KRS = [
 ];
 
 // Gleicher Projekt-/Storage-Key wie Hub und Connect: eine gemeinsame Sitzung.
-const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2.116.0');
-const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+// v2.3.0 — Im Hub eingebettet (gleiche Herkunft) wird der BEREITS ANGEMELDETE
+// Client des Hubs benutzt (window.parent.KRSHub.getClient). Das spart das
+// Nachladen von supabase-js über esm.sh (~20 Dateien, 1–2 s) und verhindert,
+// dass zwei Clients dieselbe Sitzung parallel erneuern. Allein geöffnet
+// (Lesezeichen/PWA) oder falls der Hub nicht antwortet: eigener Client wie bisher.
+let sb = null;
+let SB_FROM_HUB = false;
+try {
+  const hub = window.parent !== window ? window.parent.KRSHub : null;
+  if (hub && typeof hub.getClient === 'function') {
+    sb = await Promise.race([hub.getClient(), new Promise(r => setTimeout(() => r(null), 3000))]);
+    SB_FROM_HUB = !!(sb && sb.auth && typeof sb.from === 'function');
+    if (!SB_FROM_HUB) sb = null;
+  }
+} catch (e) { sb = null; SB_FROM_HUB = false; }
+if (!sb) {
+  const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2.116.0');
+  sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+}
 
 // ===== Utility Functions =====
 function formatDate(d) {
@@ -669,7 +691,15 @@ const Store = {
     this._buchungen = this._buchungen.map(b => b.id===id ? saved : b); this.notify(); return saved;
   },
   async deleteBuchung(id) { return this.updateBuchung(id,{status:'storniert'}); },
-  async fetchFromServer() {
+  // v2.3.0 — Beim Start riefen useEffect, INITIAL_SESSION und die Hub-Nachricht
+  // gleichzeitig fetchFromServer auf (3× dieselben 4 Abfragen). Jetzt teilen
+  // sich gleichzeitige Aufrufe einen laufenden Abruf.
+  fetchFromServer() {
+    if (this._inflight) return this._inflight;
+    this._inflight = this._fetchFromServer().finally(() => { this._inflight = null; });
+    return this._inflight;
+  },
+  async _fetchFromServer() {
     const epoch = this._epoch;
     try {
       const {data:{session},error:authError} = await sb.auth.getSession();
@@ -703,6 +733,7 @@ const Store = {
   async login(email,password) {
     const {error} = await sb.auth.signInWithPassword({email:email.trim().toLowerCase(),password});
     if(error) return {success:false,error:'Anmeldung fehlgeschlagen. Bitte dieselben Zugangsdaten wie im Hub verwenden.'};
+    if (this._inflight) { try { await this._inflight; } catch(e) {} }
     const ok=await this.fetchFromServer();
     return {success:ok,user:this._user,error:this._error};
   },
@@ -712,7 +743,9 @@ const Store = {
   }
 };
 Store.init();
-sb.auth.onAuthStateChange((event) => {
+// Mit dem Hub-Client meldet der Hub An-/Abmeldungen selbst (KRS_HUB_AUTH) —
+// kein zusätzlicher Listener auf seinem Client, der bei jedem Öffnen dazukäme.
+if (!SB_FROM_HUB) sb.auth.onAuthStateChange((event) => {
   if (event === 'SIGNED_OUT') Store.clear();
   else setTimeout(() => Store.fetchFromServer(),0);
 });
@@ -729,6 +762,12 @@ function Toast({ message, type, action, onClose }) {
     <span>${message}</span>
     ${action ? html`<button class="toast-action" onClick=${() => action.onClick()}>${action.label}</button>` : ''}
   </div>`;
+}
+
+// --- Loading Screen (v2.3.0) ---
+function LoadingScreen() {
+  return html`<div class="boot-screen" role="status" aria-live="polite">
+    <div class="boot-spinner" aria-hidden="true"></div><p>Klassenarbeitsplan wird geladen …</p></div>`;
 }
 
 // --- Login Screen ---
@@ -1430,6 +1469,9 @@ function App() {
   }, [filterKlasse]);
 
   if (!user) {
+    // v2.3.0 — Während die Sitzung geprüft wird, KEIN Anmeldeformular zeigen
+    // (das wirkte wie „ich muss mich neu anmelden“), sondern einen Ladehinweis.
+    if (Store._loading) return html`<${LoadingScreen} />`;
     return html`<${LoginScreen} onLogin=${u => setUser(u)} />`;
   }
 
