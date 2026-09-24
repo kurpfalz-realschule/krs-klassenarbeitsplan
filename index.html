@@ -298,7 +298,7 @@ const CONFIG = {
   SUPABASE_URL: 'https://ooejsfixxiuobrpqgfqm.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZWpzZml4eGl1b2JycHFnZnFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMjQ5MDYsImV4cCI6MjA4OTYwMDkwNn0.GbAv-sB4B8nNE3IPfiYIjbkMKs0Aq03c_-TUcmFY_5s',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '2.6.2',
+  APP_VERSION: '2.7.0',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
   SCHOOL_YEAR: '2026/27',
   // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
@@ -337,10 +337,15 @@ const FAECHER = [
   { kuerzel: 'BK', name: 'Bildende Kunst', gruppe: 'Nebenfach' },
   { kuerzel: 'Mu', name: 'Musik', gruppe: 'Nebenfach' },
   { kuerzel: 'Sp', name: 'Sport', gruppe: 'Nebenfach' },
-  { kuerzel: 'Rel', name: 'Religion', gruppe: 'Nebenfach' },
-  { kuerzel: 'Eth', name: 'Ethik', gruppe: 'Nebenfach' },
-  { kuerzel: 'Te', name: 'Technik', gruppe: 'Nebenfach' },
-  { kuerzel: 'AES', name: 'AES', gruppe: 'Nebenfach' },
+  // parallelGruppe: Kurse, die verschiedene Schüler derselben Klasse betreffen (v2.7.0).
+  // Zwei KA am selben Tag sind erlaubt, wenn beide Fächer dieselbe Gruppe haben und
+  // nicht dasselbe Fach sind; in der Wochenzählung zählen sie als EINE Arbeit.
+  // Server-Gegenstück: ka_private.fach_parallelgruppe()
+  { kuerzel: 'Rel', name: 'Religion', gruppe: 'Nebenfach', parallelGruppe: 'RelEth' },
+  { kuerzel: 'Eth', name: 'Ethik', gruppe: 'Nebenfach', parallelGruppe: 'RelEth' },
+  { kuerzel: 'Te', name: 'Technik', gruppe: 'Nebenfach', parallelGruppe: 'WPF' },
+  { kuerzel: 'AES', name: 'AES', gruppe: 'Nebenfach', parallelGruppe: 'WPF' },
+  { kuerzel: 'F-WPF', name: 'Französisch (Wahlpflicht)', gruppe: 'Nebenfach', parallelGruppe: 'WPF' },
   { kuerzel: 'Inf', name: 'Informatik', gruppe: 'Nebenfach' },
 ];
 
@@ -490,6 +495,23 @@ function getFachGruppe(fachKuerzel) {
   return fach ? fach.gruppe : 'Nebenfach';
 }
 
+function getParallelGruppe(fachKuerzel) {
+  const fach = FAECHER.find(f => f.kuerzel === fachKuerzel);
+  return (fach && fach.parallelGruppe) || null;
+}
+
+// Dürfen zwei KA am selben Tag in derselben Klasse liegen? (WPF: Te/AES/F-WPF, Rel/Eth)
+function istParallelErlaubt(fachA, fachB) {
+  const g = getParallelGruppe(fachA);
+  return !!g && g === getParallelGruppe(fachB) && fachA !== fachB;
+}
+
+// Schlüssel für die Wochenzählung: KA derselben Parallelgruppe am selben Tag = 1 Arbeit
+function kaZaehlSchluessel(b) {
+  const g = getParallelGruppe(b.fach);
+  return g ? `${b.datum}|${g}` : `id:${b.id}`;
+}
+
 function getChipClass(art, fachKuerzel, isException) {
   if (isException) return 'exception';
   if (art === 'AuV') return 'event';
@@ -523,7 +545,9 @@ function isExceptionBooking(buchung) {
     if (a.datum !== b.datum) return a.datum.localeCompare(b.datum);
     return (a.erstellt_am || '').localeCompare(b.erstellt_am || '');
   });
-  const idx = weekKAs.findIndex(b => b.id === buchung.id);
+  const keys = [];
+  weekKAs.forEach(b => { const k = kaZaehlSchluessel(b); if (!keys.includes(k)) keys.push(k); });
+  const idx = keys.indexOf(kaZaehlSchluessel(buchung));
   return idx >= 3; // 4th or later = exception (0-indexed: 0,1,2 are ok, 3+ is exception)
 }
 
@@ -586,7 +610,7 @@ const Store = {
 
   getKaCountForWeek(monday, klasse) {
     const buch = this.getBuchungenForWeek(monday, klasse);
-    return buch.filter(b => b.art === 'KA').length; // Nur reguläre KA zählen (NVO), nicht Nachschreiber
+    return new Set(buch.filter(b => b.art === 'KA').map(kaZaehlSchluessel)).size; // Nur reguläre KA (nicht Nachschreiber); Parallelgruppe am selben Tag = 1
   },
 
   // Prüfungsdichte einer Klasse in einer Woche (über die harte NVO-Regel hinaus)
@@ -637,7 +661,8 @@ const Store = {
       const existing = this.buchungen.filter(b =>
         b.datum === dk && b.klasse === klasse &&
         b.art === 'KA' &&
-        b.id !== excludeId
+        b.id !== excludeId &&
+        !istParallelErlaubt(b.fach, buchung.fach)
       );
       if (existing.length >= 1) {
         errors.push(`Bereits ${existing.length} Klassenarbeit(en) an diesem Tag in ${klasse}: ${existing.map(b => b.fach).join(', ')}`);
@@ -660,13 +685,14 @@ const Store = {
     if (buchung.art === 'KA') {
       const monday = getMonday(dk);
       const maxKa = 3;
-      const weekCount = this.buchungen.filter(b => {
+      const neuSchluessel = kaZaehlSchluessel({ ...buchung, datum: dk, id: excludeId || 'neu' });
+      const weekCount = new Set(this.buchungen.filter(b => {
         if (b.id === excludeId) return false;
         if (b.klasse !== klasse) return false;
         if (b.art !== 'KA') return false; // Nur reguläre KA zählen
         const bMonday = getMonday(b.datum);
         return dateKey(bMonday) === dateKey(monday);
-      }).length;
+      }).map(kaZaehlSchluessel).filter(k => k !== neuSchluessel)).size; // Parallelgruppe am selben Tag = 1
 
       if (weekCount + 1 > maxKa) {
         warnings.push(`⚠️ ${weekCount + 1}. Klassenarbeit in dieser Woche für ${klasse} – die empfohlene Höchstzahl von ${maxKa} wird überschritten.`);

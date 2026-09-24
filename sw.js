@@ -1,6 +1,6 @@
 // Service Worker — KRS Klassenarbeitsplan
 // Bei JEDEM Deploy hochzaehlen - sonst liefert der Cache die alte index.html weiter.
-const CACHE_NAME = 'krs-ka-v2.6.2';
+const CACHE_NAME = 'krs-ka-v2.7.0';
 const ASSETS = [
   './',
   './index.html',
