@@ -293,7 +293,7 @@ const CONFIG = {
   SUPABASE_URL: 'https://ooejsfixxiuobrpqgfqm.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZWpzZml4eGl1b2JycHFnZnFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMjQ5MDYsImV4cCI6MjA4OTYwMDkwNn0.GbAv-sB4B8nNE3IPfiYIjbkMKs0Aq03c_-TUcmFY_5s',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '2.4.0',
+  APP_VERSION: '2.5.0',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
   SCHOOL_YEAR: '2026/27',
   // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
@@ -563,9 +563,14 @@ const Store = {
   get readonly() { return !!this._readonly; },
 
   setUser(user) { this._user = user; this.notify(); },
+  // v2.5.0 — Lehrkraft-Filter wirkt jetzt in ALLEN Ansichten. Er filtert nur die
+  // ANZEIGE (getBuchungenForDay); Prüfungsdichte, NVO-Grenzen und Ausnahme-Markierung
+  // rechnen weiter mit allen Buchungen der Klasse (getBuchungenForWeek, validate).
+  _filterLehrkraft: 'alle',
+  setFilterLehrkraft(v) { this._filterLehrkraft = v || 'alle'; this.notify(); },
   getBuchungenForDay(datum, klasse) {
     const dk = dateKey(datum);
-    return this.buchungen.filter(b => b.datum === dk && b.klasse === klasse);
+    return this.buchungen.filter(b => b.datum === dk && b.klasse === klasse && matchesLehrkraft(b, this._filterLehrkraft));
   },
 
   getBuchungenForWeek(monday, klasse) {
@@ -1506,11 +1511,12 @@ function YearView({ onMonthClick, onDayClick, visibleKlassen }) {
     Store.buchungen.forEach(b => {
       // Apply class filter
       if (klassen.length < KLASSEN.length && !klassen.includes(b.klasse)) return;
+      if (!matchesLehrkraft(b, Store._filterLehrkraft)) return;
       if (!map[b.datum]) map[b.datum] = [];
       map[b.datum].push(b);
     });
     return map;
-  }, [Store.buchungen, klassen]);
+  }, [Store.buchungen, klassen, Store._filterLehrkraft]);
 
   return html`
     <div class="year-container">
@@ -1677,7 +1683,7 @@ function App() {
           `)}
           ${KLASSEN.map(k => html`<option value=${k}>${k}</option>`)}
         </select>
-        <select value=${filterLehrkraft} onChange=${e => setFilterLehrkraft(e.target.value)}>
+        <select value=${filterLehrkraft} onChange=${e => { setFilterLehrkraft(e.target.value); Store.setFilterLehrkraft(e.target.value); }}>
           <option value="alle">Alle Lehrkräfte</option>
           <option value="mine">Nur meine</option>
           ${Store.lehrkraefte.map(l =>
