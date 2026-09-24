@@ -293,7 +293,7 @@ const CONFIG = {
   SUPABASE_URL: 'https://ooejsfixxiuobrpqgfqm.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZWpzZml4eGl1b2JycHFnZnFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMjQ5MDYsImV4cCI6MjA4OTYwMDkwNn0.GbAv-sB4B8nNE3IPfiYIjbkMKs0Aq03c_-TUcmFY_5s',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '2.5.0',
+  APP_VERSION: '2.6.0',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
   SCHOOL_YEAR: '2026/27',
   // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
@@ -313,8 +313,8 @@ const KLASSEN = [
 const KLASSEN_META = {};
 KLASSEN.forEach(k => {
   const stufe = parseInt(k);
-  // Max 2 KA pro Woche für ALLE Klassen (Schulregel KRS)
-  KLASSEN_META[k] = { stufe, maxKaWoche: 2 };
+  // Max 3 KA pro Woche für ALLE Klassen (Schulregel KRS)
+  KLASSEN_META[k] = { stufe, maxKaWoche: 3 };
 });
 
 const FAECHER = [
@@ -341,6 +341,7 @@ const FAECHER = [
 
 const ART_TYPEN = [
   { value: 'KA', label: 'Klassenarbeit', color: 'ka' },
+  { value: 'Pruefung', label: 'Prüfung', color: 'ka-neben' },
   { value: 'Test', label: 'Test', color: 'test' },
   { value: 'VocTest', label: 'Voc-Test', color: 'test' },
   { value: 'GFS', label: 'GFS', color: 'ka-neben' },
@@ -502,7 +503,7 @@ function getBookingTitle(b) {
   return `${b.fach} ${b.art} (${b.lehrkraft})${b.notiz ? ' – ' + b.notiz : ''}`;
 }
 
-// Check if a booking is an exception (3rd+ KA in a week for its class)
+// Check if a booking is an exception (4th+ KA in a week for its class)
 // NVO: Nur reguläre KA zählen, Nachschreiber nicht
 function isExceptionBooking(buchung) {
   if (buchung.art !== 'KA') return false; // Nur reguläre KA können Ausnahmen sein
@@ -518,7 +519,7 @@ function isExceptionBooking(buchung) {
     return (a.erstellt_am || '').localeCompare(b.erstellt_am || '');
   });
   const idx = weekKAs.findIndex(b => b.id === buchung.id);
-  return idx >= 2; // 3rd or later = exception (0-indexed: 0,1 are ok, 2+ is exception)
+  return idx >= 3; // 4th or later = exception (0-indexed: 0,1,2 are ok, 3+ is exception)
 }
 
 // ===== Data Store =====
@@ -650,10 +651,10 @@ const Store = {
       }
     }
 
-    // 4. Max 2 KA per week (NVO BW) — nur reguläre KA, Nachschreiber zählen NICHT
+    // 4. Max 3 KA per week (Schulregel KRS) — nur reguläre KA, Nachschreiber zählen NICHT
     if (buchung.art === 'KA') {
       const monday = getMonday(dk);
-      const maxKa = 2;
+      const maxKa = 3;
       const weekCount = this.buchungen.filter(b => {
         if (b.id === excludeId) return false;
         if (b.klasse !== klasse) return false;
@@ -663,7 +664,7 @@ const Store = {
       }).length;
 
       if (weekCount + 1 > maxKa) {
-        errors.push(`Zu viele KA in dieser Woche für ${klasse}: ${weekCount + 1} geplant, max. ${maxKa} erlaubt (NVO BW). Bitte anderen Termin wählen.`);
+        errors.push(`Zu viele Klassenarbeiten in dieser Woche für ${klasse}: ${weekCount + 1} geplant, max. ${maxKa} erlaubt. Bitte anderen Termin wählen.`);
       }
     }
 
@@ -1165,7 +1166,7 @@ function CalendarView({ onCellClick, onChipClick, visibleKlassen }) {
                     return html`
                     <span class="chip ${getChipClass(b.art, b.fach, exc)}"
                       onClick=${(e) => { e.stopPropagation(); onChipClick(b); }}
-                      title=${exc ? 'Ausnahme: 3+ KA in dieser Woche!' : getBookingTitle(b)}>
+                      title=${exc ? 'Ausnahme: 4+ KA in dieser Woche!' : getBookingTitle(b)}>
                       ${exc ? '⚠ ' : ''}${getBookingLabel(b)}
                       <span class="chip-teacher">(${b.lehrkraft})</span>
                     </span>
@@ -1357,7 +1358,7 @@ function MonthCalendarView({ visibleKlassen, filterLehrkraft, onDayClick, onChip
         <span><i style="background:var(--ka-neben)"></i>KA Nebenfach</span>
         <span><i style="background:var(--gold)"></i>Test</span>
         <span><i style="background:var(--event)"></i>AuV</span>
-        <span><i style="background:var(--exception)"></i>Ausnahme (3. KA/Woche)</span>
+        <span><i style="background:var(--exception)"></i>Ausnahme (4+ KA/Woche)</span>
       </div>
     </div>`;
 }
@@ -1530,7 +1531,7 @@ function YearView({ onMonthClick, onDayClick, visibleKlassen }) {
         <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--ka-neben)"></div> KA Nebenfach</div>
         <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--gold)"></div> Test</div>
         <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--event)"></div> AuV</div>
-        <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--exception)"></div> Ausnahme (3+ KA/Woche)</div>
+        <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--exception)"></div> Ausnahme (4+ KA/Woche)</div>
         <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--holiday)"></div> Ferien</div>
       </div>
 
