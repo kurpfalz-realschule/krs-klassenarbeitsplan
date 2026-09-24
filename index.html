@@ -110,6 +110,11 @@ a{color:var(--primary);text-decoration:none}
 .validation-msg.warn{background:#fefce8;color:#854d0e;border:1px solid #fef08a}
 .validation-msg.error{background:var(--warn-light);color:#991b1b;border:1px solid #fecaca}
 
+.class-picker-actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.class-picker{display:grid;grid-template-columns:repeat(auto-fill,minmax(58px,1fr));gap:6px}
+.class-picker button{min-height:38px;border:1px solid var(--border);border-radius:var(--radius);background:#fff;font-weight:700;cursor:pointer}
+.class-picker button.active{background:var(--accent-light);border-color:var(--accent);color:var(--accent-dark)}
+
 /* Buttons */
 .btn{padding:10px 20px;border-radius:var(--radius);font-weight:600;font-size:.9rem;min-height:var(--touch-min);display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:all .15s}
 .btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:var(--accent-dark)}
@@ -293,7 +298,7 @@ const CONFIG = {
   SUPABASE_URL: 'https://ooejsfixxiuobrpqgfqm.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZWpzZml4eGl1b2JycHFnZnFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMjQ5MDYsImV4cCI6MjA4OTYwMDkwNn0.GbAv-sB4B8nNE3IPfiYIjbkMKs0Aq03c_-TUcmFY_5s',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '2.6.0',
+  APP_VERSION: '2.6.1',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
   SCHOOL_YEAR: '2026/27',
   // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
@@ -719,6 +724,15 @@ const Store = {
     if (error) throw error;
     const saved = this.mapBooking(data); this._buchungen.push(saved); this.notify(); return saved;
   },
+  async addBuchungen(buchungen) {
+    if (!this._user) throw new Error('Bitte zuerst im Hub anmelden.');
+    if (!Array.isArray(buchungen) || buchungen.length === 0) throw new Error('Bitte mindestens eine Klasse auswählen.');
+    const payload = buchungen.map(b => ({datum:b.datum,klasse:b.klasse,fach:b.fach,art:b.art,notiz:b.notiz || '',user_id:this._user.id}));
+    const {data,error} = await sb.from('ka_buchungen').insert(payload).select();
+    if (error) throw error;
+    const saved = (data || []).map(b => this.mapBooking(b));
+    this._buchungen.push(...saved); this.notify(); return saved;
+  },
   async updateBuchung(id,updates) {
     const payload = Object.fromEntries(['datum','klasse','fach','art','notiz','status'].filter(k => k in updates).map(k => [k,updates[k]]));
     const {data,error} = await sb.from('ka_buchungen').update(payload).eq('id',id).select().single();
@@ -843,6 +857,7 @@ function BookingDialog({ datum, klasse, buchung, onClose, onSave, onDelete, show
   const [art, setArt] = useState(buchung?.art || 'KA');
   const [lehrkraft, setLehrkraft] = useState(buchung?.lehrkraft || Store.user?.kuerzel || '');
   const [notiz, setNotiz] = useState(buchung?.notiz || '');
+  const [auvKlassen, setAuvKlassen] = useState([buchung?.klasse || klasse]);
   const [validation, setValidation] = useState(null);
   const [saving, setSaving] = useState(false);
   const canEdit = !Store.readonly && (!buchung || buchung.user_id === Store.user?.id);
@@ -850,6 +865,7 @@ function BookingDialog({ datum, klasse, buchung, onClose, onSave, onDelete, show
   const bDatum = buchung?.datum || dateKey(datum);
   const bKlasse = buchung?.klasse || klasse;
   const isAuv = art === 'AuV';
+  const toggleAuvKlasse = k => setAuvKlassen(current => current.includes(k) ? current.filter(x => x !== k) : [...current, k]);
 
   useEffect(() => {
     if (isAuv && fach !== 'AuV') setFach('AuV');
@@ -867,12 +883,16 @@ function BookingDialog({ datum, klasse, buchung, onClose, onSave, onDelete, show
     if(saving || !canEdit) return;
     if(!fach) { showToast('Bitte Fach auswählen','error'); return; }
     if(isAuv && !notiz.trim()) { showToast('Bitte Veranstaltung angeben','error'); return; }
+    if(isAuv && !isEdit && auvKlassen.length === 0) { showToast('Bitte mindestens eine Klasse auswählen','error'); return; }
     if(validation && !validation.valid) { showToast(validation.errors[0],'error'); return; }
     setSaving(true);
     try {
       const data={datum:bDatum,klasse:bKlasse,fach,art,notiz};
-      if(isEdit) await Store.updateBuchung(buchung.id,data); else await Store.addBuchung(data);
-      showToast(isEdit ? 'Buchung gespeichert' : 'Buchung erstellt','success'); onSave();
+      if(isEdit) await Store.updateBuchung(buchung.id,data);
+      else if(isAuv) await Store.addBuchungen(auvKlassen.map(k => ({...data, klasse:k})));
+      else await Store.addBuchung(data);
+      const countText = isAuv && !isEdit && auvKlassen.length > 1 ? ` für ${auvKlassen.length} Klassen` : '';
+      showToast(isEdit ? 'Buchung gespeichert' : `Buchung${countText} erstellt`,'success'); onSave();
     } catch(e) { showToast('Nicht gespeichert: '+e.message,'error'); }
     finally { setSaving(false); }
   };
@@ -896,7 +916,7 @@ function BookingDialog({ datum, klasse, buchung, onClose, onSave, onDelete, show
         <div class="modal-body">
           <div style="display:flex;gap:16px;margin-bottom:16px;padding:10px;background:var(--primary-light);border-radius:var(--radius)">
             <div><strong>Datum:</strong> ${formatDate(bDatum)}</div>
-            <div><strong>Klasse:</strong> ${bKlasse}</div>
+            <div><strong>${isAuv && !isEdit ? 'Klassen:' : 'Klasse:'}</strong> ${isAuv && !isEdit ? (auvKlassen.length ? `${auvKlassen.length} ausgewählt` : 'keine ausgewählt') : bKlasse}</div>
           </div>
 
           <div class="form-group">
@@ -911,6 +931,22 @@ function BookingDialog({ datum, klasse, buchung, onClose, onSave, onDelete, show
               `)}
             </div>
           </div>
+
+          ${isAuv && !isEdit && html`
+            <div class="form-group">
+              <label>Betroffene Klassen</label>
+              <div class="class-picker-actions">
+                <button type="button" class="btn btn-sm btn-secondary" onClick=${() => setAuvKlassen([...KLASSEN])}>Ganze Schule</button>
+                ${['5','6','7','8','9','10'].map(stufe => html`
+                  <button type="button" class="btn btn-sm btn-secondary" onClick=${() => setAuvKlassen(KLASSEN.filter(k => k.startsWith(stufe)))}>Alle ${stufe}. Klassen</button>
+                `)}
+                <button type="button" class="btn btn-sm btn-secondary" onClick=${() => setAuvKlassen([])}>Auswahl löschen</button>
+              </div>
+              <div class="class-picker">
+                ${KLASSEN.map(k => html`<button type="button" class=${auvKlassen.includes(k) ? 'active' : ''} aria-pressed=${auvKlassen.includes(k)} onClick=${() => toggleAuvKlasse(k)}>${k}</button>`)}
+              </div>
+            </div>
+          `}
 
           ${!isAuv && html`
             <div class="form-group">
