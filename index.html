@@ -117,6 +117,36 @@ a{color:var(--primary);text-decoration:none}
 .btn-danger{background:var(--warn);color:#fff}.btn-danger:hover{background:#dc2626}
 .btn-sm{padding:6px 12px;font-size:.8rem;min-height:32px}
 
+/* ===== Monatskalender (v2.4.0, iPad-optimiert) ===== */
+.mk-wrap{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;padding:6px 12px 8px;background:var(--bg,#f5f7fa)}
+.mk-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
+.mk-head{text-align:center;font-size:.8rem;font-weight:700;color:var(--text-light);text-transform:uppercase;letter-spacing:.04em;padding:4px 0}
+.mk-day{background:#fff;border:1px solid var(--border);border-radius:10px;padding:5px 6px 6px;display:flex;flex-direction:column;gap:2px;overflow:hidden;cursor:pointer;text-align:left;font:inherit;color:inherit;min-width:0;-webkit-tap-highlight-color:transparent}
+.mk-day:hover{border-color:var(--primary)}
+.mk-day:focus-visible{outline:3px solid var(--accent);outline-offset:1px}
+.mk-day.out{opacity:.45}
+.mk-day.today{border:2px solid var(--accent);box-shadow:0 0 0 3px var(--accent-light)}
+.mk-day.holiday{background:#eef1f5;cursor:default}
+.mk-daytop{display:flex;align-items:baseline;justify-content:space-between;gap:4px;min-height:20px}
+.mk-num{font-weight:700;font-size:1rem}
+.mk-day.today .mk-num{color:var(--accent-dark,#c2410c)}
+.mk-count{font-size:.7rem;color:var(--text-light);font-weight:600}
+.mk-hol{font-size:.72rem;color:var(--holiday);line-height:1.2}
+.mk-chip{display:flex;gap:4px;align-items:center;border-radius:5px;padding:2px 6px;font-size:.78rem;line-height:1.2;color:#fff;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;height:22px;flex-shrink:0;border:0;width:100%;text-align:left;cursor:pointer}
+.mk-chip .mk-kl{font-weight:800;min-width:2.1em}
+.mk-chip .mk-lk{margin-left:auto;font-weight:500;opacity:.9;font-size:.72rem}
+.mk-chip.ka-haupt{background:var(--ka-haupt)}.mk-chip.ka-neben{background:var(--ka-neben)}
+.mk-chip.test{background:var(--gold);color:#333}.mk-chip.event{background:var(--event)}.mk-chip.exception{background:var(--exception)}
+.mk-more{font-size:.75rem;font-weight:700;color:var(--primary-dark,#334155);padding:2px 4px}
+.mk-legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.72rem;color:var(--text-light);padding:8px 2px 0}
+.mk-legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-2px}
+.mk-daylist{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+.mk-daylist .mk-chip{height:auto;min-height:var(--touch-min);font-size:.9rem;padding:8px 12px}
+.mk-klassen{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:6px}
+.mk-klassen button{min-height:var(--touch-min);border:1px solid var(--border);border-radius:var(--radius);background:#fff;font-weight:700;font-size:.95rem;cursor:pointer}
+.mk-klassen button:hover{background:var(--primary-light)}
+@media(max-width:600px){.mk-grid{gap:3px}.mk-day{min-height:84px;padding:4px 3px}.mk-chip{font-size:.66rem;padding:1px 3px;height:18px}.mk-chip .mk-lk{display:none}.mk-wrap{padding:6px 4px}}
+@media print{.mk-day{break-inside:avoid;min-height:100px}}
 /* ===== Boot/Loading Screen (v2.3.0) ===== */
 .boot-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;min-height:100vh;color:var(--text-light);font-size:.95rem}
 .boot-spinner{width:32px;height:32px;border:3px solid #dbe3ee;border-top-color:var(--primary);border-radius:50%;animation:boot-spin .8s linear infinite}
@@ -263,7 +293,7 @@ const CONFIG = {
   SUPABASE_URL: 'https://ooejsfixxiuobrpqgfqm.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZWpzZml4eGl1b2JycHFnZnFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMjQ5MDYsImV4cCI6MjA4OTYwMDkwNn0.GbAv-sB4B8nNE3IPfiYIjbkMKs0Aq03c_-TUcmFY_5s',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '2.3.0',
+  APP_VERSION: '2.4.0',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
   SCHOOL_YEAR: '2026/27',
   // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
@@ -1225,6 +1255,139 @@ function MonthView({ onCellClick, onChipClick, visibleKlassen }) {
   `;
 }
 
+// --- Monatskalender (v2.4.0) ---
+// Klassischer Kalender Mo–Fr, eine Kachel pro Tag, alle Einträge darin.
+// Für das iPad gebaut: große Tippflächen, ganzer Monat ohne Scrollen im Querformat.
+// Tippen auf einen Eintrag → bearbeiten; auf den Tag → Tagesliste + neue Buchung.
+function matchesLehrkraft(b, filterLehrkraft) {
+  if (!filterLehrkraft || filterLehrkraft === 'alle') return true;
+  if (filterLehrkraft === 'mine') return b.user_id === Store.user?.id;
+  return b.lehrkraft === filterLehrkraft;
+}
+function getMonthCalendarWeeks(year, month) {
+  // Wochen (Mo–Fr), die den Monat berühren; Tage außerhalb werden gedimmt gezeigt.
+  const first = new Date(year, month, 1);
+  const last = new Date(year, month + 1, 0);
+  let monday = getMonday(first);
+  if (first.getDay() === 6 || first.getDay() === 0) monday = addDays(getMonday(first), 7);
+  const weeks = [];
+  while (monday <= last) { weeks.push(getWeekDates(monday)); monday = addDays(monday, 7); }
+  return weeks;
+}
+function MonthCalendarView({ visibleKlassen, filterLehrkraft, onDayClick, onChipClick }) {
+  const now = new Date();
+  const [ym, setYm] = useState({ y: now.getFullYear(), m: now.getMonth() });
+  const todayKey = dateKey(now);
+  const weeks = useMemo(() => getMonthCalendarWeeks(ym.y, ym.m), [ym.y, ym.m]);
+  const klassen = new Set(visibleKlassen || KLASSEN);
+  // Der ganze Monat soll ohne Scrollen auf den Bildschirm passen: Zeilenhöhe aus
+  // der verfügbaren Höhe berechnen, danach richtet sich, wie viele Einträge je
+  // Tag direkt sichtbar sind (Rest: „+ N weitere“ → Tagesliste).
+  const wrapRef = useRef(null);
+  const [avail, setAvail] = useState(0);
+  useEffect(() => {
+    const measure = () => {
+      const top = wrapRef.current ? wrapRef.current.getBoundingClientRect().top : 200;
+      setAvail(Math.max(0, window.innerHeight - top));
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, []);
+  const small = window.innerWidth < 600;
+  const chipH = small ? 20 : 24;
+  const rowH = avail ? Math.floor((avail - 30 - 44 - 6 * weeks.length) / weeks.length) : 0; // − Kopfzeile − Legende − Abstände
+  const dayH = Math.max(small ? 84 : 104, rowH);
+  const maxChips = Math.max(2, Math.floor((dayH - 30 - 20) / chipH)); // − Datumszeile − „weitere“-Zeile
+  const move = d => setYm(({ y, m }) => { const t = new Date(y, m + d, 1); return { y: t.getFullYear(), m: t.getMonth() }; });
+  const entriesFor = date => {
+    const dk = dateKey(date);
+    return Store.buchungen
+      .filter(b => b.datum === dk && klassen.has(b.klasse) && matchesLehrkraft(b, filterLehrkraft))
+      .sort((a, b) => KLASSEN.indexOf(a.klasse) - KLASSEN.indexOf(b.klasse));
+  };
+  return html`
+    <div class="nav-bar">
+      <div class="week-nav">
+        <button onClick=${() => move(-1)} aria-label="Vorheriger Monat">◀</button>
+        <span class="week-label">${MONTH_NAMES[ym.m]} ${ym.y}</span>
+        <button onClick=${() => move(1)} aria-label="Nächster Monat">▶</button>
+      </div>
+      <button class="today-btn" onClick=${() => setYm({ y: now.getFullYear(), m: now.getMonth() })}>Heute</button>
+    </div>
+    <div class="mk-wrap" ref=${wrapRef}>
+      <div class="mk-grid" role="grid" aria-label=${'Klassenarbeiten ' + MONTH_NAMES[ym.m] + ' ' + ym.y}>
+        ${['Mo','Di','Mi','Do','Fr'].map(d => html`<div class="mk-head" role="columnheader">${d}</div>`)}
+        ${weeks.flat().map(date => {
+          const dk = dateKey(date);
+          const out = date.getMonth() !== ym.m;
+          const holiday = isHoliday(date, Store.ferien);
+          const list = holiday ? [] : entriesFor(date);
+          const shown = list.length <= maxChips + 1 ? list : list.slice(0, maxChips);
+          const cls = 'mk-day' + (out ? ' out' : '') + (dk === todayKey ? ' today' : '') + (holiday ? ' holiday' : '');
+          return html`
+            <div class=${cls} role="gridcell" tabindex=${holiday ? -1 : 0} style=${'min-height:' + dayH + 'px'}
+              aria-label=${date.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' }) + (holiday ? ', ' + getHolidayName(date, Store.ferien) : ', ' + list.length + ' Einträge')}
+              onClick=${() => !holiday && onDayClick(date)}
+              onKeyDown=${e => { if (!holiday && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onDayClick(date); } }}>
+              <div class="mk-daytop">
+                <span class="mk-num">${date.getDate()}.${out ? (date.getMonth() + 1) + '.' : ''}</span>
+                ${list.length > 0 && html`<span class="mk-count">${list.length}</span>`}
+              </div>
+              ${holiday && html`<div class="mk-hol">${getHolidayName(date, Store.ferien)}</div>`}
+              ${shown.map(b => html`
+                <button type="button" class=${'mk-chip ' + getChipClass(b.art, b.fach, isExceptionBooking(b))}
+                  title=${b.klasse + ' · ' + getBookingTitle(b)}
+                  onClick=${e => { e.stopPropagation(); onChipClick(b); }}>
+                  <span class="mk-kl">${b.klasse}</span>
+                  <span>${b.art === 'AuV' ? 'AuV' + (b.notiz ? ': ' + b.notiz : '') : b.fach + ' ' + b.art}</span>
+                  <span class="mk-lk">${b.lehrkraft}</span>
+                </button>`)}
+              ${list.length > shown.length && html`<span class="mk-more">+ ${list.length - shown.length} weitere</span>`}
+            </div>`;
+        })}
+      </div>
+      <div class="mk-legend" aria-label="Legende">
+        <span><i style="background:var(--ka-haupt)"></i>KA Hauptfach</span>
+        <span><i style="background:var(--ka-neben)"></i>KA Nebenfach</span>
+        <span><i style="background:var(--gold)"></i>Test</span>
+        <span><i style="background:var(--event)"></i>AuV</span>
+        <span><i style="background:var(--exception)"></i>Ausnahme (3. KA/Woche)</span>
+      </div>
+    </div>`;
+}
+
+// Tagesliste: alle Einträge des Tages + neue Buchung mit Klassenwahl.
+function DayDialog({ datum, visibleKlassen, filterLehrkraft, onClose, onChipClick, onNew }) {
+  const dk = dateKey(datum);
+  const klassen = visibleKlassen || KLASSEN;
+  const list = Store.buchungen
+    .filter(b => b.datum === dk && klassen.includes(b.klasse) && matchesLehrkraft(b, filterLehrkraft))
+    .sort((a, b) => KLASSEN.indexOf(a.klasse) - KLASSEN.indexOf(b.klasse));
+  return html`
+    <div class="modal-overlay" onClick=${e => e.target === e.currentTarget && onClose()}>
+      <div class="modal" role="dialog" aria-modal="true" aria-label=${'Tag ' + formatDate(datum)}>
+        <div class="modal-header">
+          <h2>${formatDate(datum)}</h2>
+          <button onClick=${onClose} aria-label="Schließen" style="font-size:1.3rem;padding:4px">✕</button>
+        </div>
+        <div class="modal-body">
+          ${list.length === 0
+            ? html`<p style="color:var(--text-light);margin-bottom:14px">Noch keine Einträge an diesem Tag.</p>`
+            : html`<div class="mk-daylist">${list.map(b => html`
+                <button type="button" class=${'mk-chip ' + getChipClass(b.art, b.fach, isExceptionBooking(b))} onClick=${() => onChipClick(b)}>
+                  <span class="mk-kl">${b.klasse}</span>
+                  <span>${b.art === 'AuV' ? 'AuV' + (b.notiz ? ': ' + b.notiz : '') : b.fach + ' ' + b.art + (b.notiz ? ' – ' + b.notiz : '')}</span>
+                  <span class="mk-lk">${b.lehrkraft}</span>
+                </button>`)}</div>`}
+          ${!Store.readonly && html`
+            <label style="display:block;font-weight:600;margin-bottom:8px">Neue Buchung für Klasse …</label>
+            <div class="mk-klassen">${klassen.map(k => html`<button type="button" onClick=${() => onNew(k)}>${k}</button>`)}</div>`}
+        </div>
+      </div>
+    </div>`;
+}
+
 // --- Quarter View (3-Monatsansicht) ---
 function QuarterView({ onCellClick, onChipClick, visibleKlassen }) {
   const now = new Date();
@@ -1440,7 +1603,14 @@ function App() {
   const [toast, setToast] = useState(null);
   const [filterKlasse, setFilterKlasse] = useState('alle');
   const [filterLehrkraft, setFilterLehrkraft] = useState('alle');
-  const [viewMode, setViewMode] = useState('week'); // 'week', 'month', 'quarter', 'year'
+  // v2.4.0 — Start im Monatskalender (iPad/Rechner); auf dem Handy Woche.
+  // Die zuletzt gewählte Ansicht merkt sich das Gerät.
+  const [viewMode, setViewModeRaw] = useState(() => {
+    try { const v = localStorage.getItem('krs_ka_view'); if (['calendar','week','month','quarter','year'].includes(v)) return v; } catch (e) {}
+    return window.innerWidth >= 700 ? 'calendar' : 'week';
+  }); // 'calendar' (Monatskalender), 'week', 'month' (Raster), 'quarter', 'year'
+  const setViewMode = v => { setViewModeRaw(v); try { localStorage.setItem('krs_ka_view', v); } catch (e) {} };
+  const [dayDialog, setDayDialog] = useState(null);
   const [, forceUpdate] = useState(0);
 
   // Subscribe to store changes
@@ -1461,6 +1631,12 @@ function App() {
   }, []);
 
   const showToast = (msg, type, action) => setToast({ message: msg, type, action });
+
+  const currentKlassen = useMemo(() => {
+    if (filterKlasse === 'alle') return KLASSEN;
+    if (filterKlasse.startsWith('stufe')) { const s = filterKlasse.replace('stufe',''); return KLASSEN.filter(k => k.startsWith(s)); }
+    return [filterKlasse];
+  }, [filterKlasse]);
 
   const visibleKlassen = useMemo(() => {
     if (filterKlasse !== 'alle') return [filterKlasse];
@@ -1514,13 +1690,22 @@ function App() {
           + Neue Buchung
         </button>`}
         <div class="view-switcher">
+          <button class=${viewMode === 'calendar' ? 'active' : ''} onClick=${() => setViewMode('calendar')}>Monat</button>
           <button class=${viewMode === 'week' ? 'active' : ''} onClick=${() => setViewMode('week')}>Woche</button>
-          <button class=${viewMode === 'month' ? 'active' : ''} onClick=${() => setViewMode('month')}>Monat</button>
+          <button class=${viewMode === 'month' ? 'active' : ''} onClick=${() => setViewMode('month')} title="Monat als Raster Tag × Klasse">Raster</button>
           <button class=${viewMode === 'quarter' ? 'active' : ''} onClick=${() => setViewMode('quarter')}>Quartal</button>
           <button class=${viewMode === 'year' ? 'active' : ''} onClick=${() => setViewMode('year')}>Schuljahr</button>
         </div>
       </div>
 
+      ${viewMode === 'calendar' && html`
+        <${MonthCalendarView}
+          visibleKlassen=${currentKlassen}
+          filterLehrkraft=${filterLehrkraft}
+          onDayClick=${date => setDayDialog({ datum: date })}
+          onChipClick=${(buchung) => setDialog({ datum: buchung.datum, klasse: buchung.klasse, buchung })}
+        />
+      `}
       ${viewMode === 'week' && html`
         <${CalendarView}
           visibleKlassen=${(() => {
@@ -1576,19 +1761,29 @@ function App() {
             }
             return [filterKlasse];
           })()}
-          onMonthClick=${(year, month) => { setViewMode('month'); }}
+          onMonthClick=${(year, month) => { setViewMode('calendar'); }}
           onDayClick=${(date) => { setViewMode('week'); }}
         />
       `}
 
+      ${dayDialog && !dialog && html`
+        <${DayDialog}
+          datum=${dayDialog.datum}
+          visibleKlassen=${currentKlassen}
+          filterLehrkraft=${filterLehrkraft}
+          onClose=${() => setDayDialog(null)}
+          onChipClick=${(buchung) => setDialog({ datum: buchung.datum, klasse: buchung.klasse, buchung })}
+          onNew=${(klasse) => setDialog({ datum: dayDialog.datum, klasse })}
+        />
+      `}
       ${dialog && html`
         <${BookingDialog}
           datum=${dialog.datum}
           klasse=${dialog.klasse}
           buchung=${dialog.buchung}
           onClose=${() => setDialog(null)}
-          onSave=${() => setDialog(null)}
-          onDelete=${() => setDialog(null)}
+          onSave=${() => { setDialog(null); setDayDialog(null); }}
+          onDelete=${() => { setDialog(null); setDayDialog(null); }}
           showToast=${showToast}
         />
       `}
