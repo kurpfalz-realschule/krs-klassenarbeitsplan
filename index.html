@@ -298,7 +298,7 @@ const CONFIG = {
   SUPABASE_URL: 'https://ooejsfixxiuobrpqgfqm.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZWpzZml4eGl1b2JycHFnZnFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMjQ5MDYsImV4cCI6MjA4OTYwMDkwNn0.GbAv-sB4B8nNE3IPfiYIjbkMKs0Aq03c_-TUcmFY_5s',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '2.6.1',
+  APP_VERSION: '2.6.2',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
   SCHOOL_YEAR: '2026/27',
   // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
@@ -669,7 +669,7 @@ const Store = {
       }).length;
 
       if (weekCount + 1 > maxKa) {
-        errors.push(`Zu viele Klassenarbeiten in dieser Woche für ${klasse}: ${weekCount + 1} geplant, max. ${maxKa} erlaubt. Bitte anderen Termin wählen.`);
+        warnings.push(`⚠️ ${weekCount + 1}. Klassenarbeit in dieser Woche für ${klasse} – die empfohlene Höchstzahl von ${maxKa} wird überschritten.`);
       }
     }
 
