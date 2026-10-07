@@ -302,7 +302,7 @@ const CONFIG = {
   SUPABASE_URL: 'https://ooejsfixxiuobrpqgfqm.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZWpzZml4eGl1b2JycHFnZnFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMjQ5MDYsImV4cCI6MjA4OTYwMDkwNn0.GbAv-sB4B8nNE3IPfiYIjbkMKs0Aq03c_-TUcmFY_5s',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '2.8.2',
+  APP_VERSION: '2.8.3',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
   SCHOOL_YEAR: '2026/27',
   // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
@@ -504,16 +504,22 @@ function getParallelGruppe(fachKuerzel) {
   return (fach && fach.parallelGruppe) || null;
 }
 
-// Dürfen zwei KA am selben Tag in derselben Klasse liegen? (WPF: Te/AES/F-WPF, Rel/Eth)
+// Zwei KA am selben Tag in derselben Klasse: verschiedene Fächer einer Parallelgruppe
+// (WPF: Te/AES/F-WPF, Rel/Eth) oder dasselbe Fach bei einer anderen Lehrkraft (G/M).
 function istParallelErlaubt(fachA, fachB) {
   const g = getParallelGruppe(fachA);
   return !!g && g === getParallelGruppe(fachB) && fachA !== fachB;
 }
+function istNiveauErlaubt(bestehend, buchung, anzahlGleicherFach) {
+  const lehrkraftId = buchung.user_id || Store.user?.id;
+  if (!lehrkraftId || bestehend.fach !== buchung.fach || bestehend.user_id === lehrkraftId) return false;
+  return anzahlGleicherFach < 2;
+}
 
-// Schlüssel für die Wochenzählung: KA derselben Parallelgruppe am selben Tag = 1 Arbeit
+// Wochenzählung: Parallelgruppe oder dasselbe Fach am selben Tag = 1 Arbeit.
 function kaZaehlSchluessel(b) {
   const g = getParallelGruppe(b.fach);
-  return g ? `${b.datum}|${g}` : `id:${b.id}`;
+  return g ? `${b.datum}|${g}` : `${b.datum}|${b.fach}`;
 }
 
 function getChipClass(art, fachKuerzel, isException) {
@@ -660,16 +666,21 @@ const Store = {
       errors.push('Kein Termin am Wochenende möglich.');
     }
 
-    // 3. Max 1 KA per day per class — NUR reguläre KA, NICHT Nachschreiber
+    // 3. Max 1 KA per day per class — NUR reguläre KA, NICHT Nachschreiber.
+    // Ausnahme: Parallelgruppe (verschiedene Fächer) oder dasselbe Fach, andere Lehrkraft (G/M, höchstens zwei).
     if (buchung.art === 'KA') {
-      const existing = this.buchungen.filter(b =>
-        b.datum === dk && b.klasse === klasse &&
-        b.art === 'KA' &&
-        b.id !== excludeId &&
-        !istParallelErlaubt(b.fach, buchung.fach)
+      const sameDay = this.buchungen.filter(b =>
+        b.datum === dk && b.klasse === klasse && b.art === 'KA' && b.id !== excludeId
+      );
+      const anzahlGleicherFach = sameDay.filter(b => b.fach === buchung.fach).length;
+      const existing = sameDay.filter(b =>
+        !istParallelErlaubt(b.fach, buchung.fach) &&
+        !istNiveauErlaubt(b, buchung, anzahlGleicherFach)
       );
       if (existing.length >= 1) {
         errors.push(`Bereits ${existing.length} Klassenarbeit(en) an diesem Tag in ${klasse}: ${existing.map(b => b.fach).join(', ')}`);
+      } else if (anzahlGleicherFach > 0) {
+        warnings.push(`Im Fach ${buchung.fach} hat eine andere Lehrkraft in ${klasse} schon eine Klassenarbeit an diesem Tag. Für G- und M-Niveau ist das erlaubt.`);
       }
     }
 
