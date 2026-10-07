@@ -78,6 +78,8 @@ a{color:var(--primary);text-decoration:none}
 .chip.test{background:var(--test);color:#333}
 .chip.event{background:var(--event)}
 .chip.holiday-chip{background:var(--holiday);font-weight:400;font-size:.7rem}
+.cell-add{display:inline-flex;align-items:center;justify-content:center;min-width:32px;height:32px;margin:2px 0 0;padding:0 8px;border:1px dashed var(--primary);border-radius:4px;background:#fff;color:var(--primary);font-size:.95rem;font-weight:700;line-height:1}
+.cell-add:hover,.cell-add:focus-visible{background:var(--primary-light)}
 .chip.exception{background:var(--exception);animation:pulse-exception 2s infinite}
 @keyframes pulse-exception{0%,100%{opacity:1}50%{opacity:.75}}
 .chip .chip-teacher{font-weight:400;opacity:.85;font-size:.65rem}
@@ -300,7 +302,7 @@ const CONFIG = {
   SUPABASE_URL: 'https://ooejsfixxiuobrpqgfqm.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZWpzZml4eGl1b2JycHFnZnFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMjQ5MDYsImV4cCI6MjA4OTYwMDkwNn0.GbAv-sB4B8nNE3IPfiYIjbkMKs0Aq03c_-TUcmFY_5s',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '2.8.1',
+  APP_VERSION: '2.8.2',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
   SCHOOL_YEAR: '2026/27',
   // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
@@ -885,13 +887,15 @@ function BookingDialog({ datum, klasse, buchung, onClose, onSave, onDelete, show
   const [art, setArt] = useState(buchung?.art || 'KA');
   const [lehrkraft, setLehrkraft] = useState(buchung?.lehrkraft || Store.user?.kuerzel || '');
   const [notiz, setNotiz] = useState(buchung?.notiz || '');
-  const [auvKlassen, setAuvKlassen] = useState([buchung?.klasse || klasse]);
+  const [auvKlassen, setAuvKlassen] = useState((buchung?.klasse || klasse) ? [buchung?.klasse || klasse] : []);
   const [validation, setValidation] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [datumStr, setDatumStr] = useState(buchung?.datum || dateKey(datum));
+  const [klasseSel, setKlasseSel] = useState(buchung?.klasse || klasse || '');
   const canEdit = !Store.readonly && (!buchung || buchung.user_id === Store.user?.id);
 
-  const bDatum = buchung?.datum || dateKey(datum);
-  const bKlasse = buchung?.klasse || klasse;
+  const bDatum = isEdit ? buchung.datum : datumStr;
+  const bKlasse = isEdit ? buchung.klasse : klasseSel;
   const isAuv = art === 'AuV';
   const toggleAuvKlasse = k => setAuvKlassen(current => current.includes(k) ? current.filter(x => x !== k) : [...current, k]);
 
@@ -912,7 +916,9 @@ function BookingDialog({ datum, klasse, buchung, onClose, onSave, onDelete, show
     if(!fach) { showToast('Bitte Fach auswählen','error'); return; }
     if(isAuv && !notiz.trim()) { showToast('Bitte Veranstaltung angeben','error'); return; }
     if(isAuv && !isEdit && auvKlassen.length === 0) { showToast('Bitte mindestens eine Klasse auswählen','error'); return; }
+    if(!isEdit && !bDatum) { showToast('Bitte Datum wählen','error'); return; }
     if(validation && !validation.valid) { showToast(validation.errors[0],'error'); return; }
+    if(!isEdit && !isAuv && !bKlasse) { showToast('Bitte Klasse wählen','error'); return; }
     setSaving(true);
     try {
       const data={datum:bDatum,klasse:bKlasse,fach,art,notiz};
@@ -942,10 +948,31 @@ function BookingDialog({ datum, klasse, buchung, onClose, onSave, onDelete, show
           <button onClick=${onClose} style="font-size:1.3rem;padding:4px">✕</button>
         </div>
         <div class="modal-body">
-          <div style="display:flex;gap:16px;margin-bottom:16px;padding:10px;background:var(--primary-light);border-radius:var(--radius)">
-            <div><strong>Datum:</strong> ${formatDate(bDatum)}</div>
-            <div><strong>${isAuv && !isEdit ? 'Klassen:' : 'Klasse:'}</strong> ${isAuv && !isEdit ? (auvKlassen.length ? `${auvKlassen.length} ausgewählt` : 'keine ausgewählt') : bKlasse}</div>
-          </div>
+          ${isEdit ? html`
+            <div style="display:flex;gap:16px;margin-bottom:16px;padding:10px;background:var(--primary-light);border-radius:var(--radius)">
+              <div><strong>Datum:</strong> ${formatDate(bDatum)}</div>
+              <div><strong>Klasse:</strong> ${bKlasse}</div>
+            </div>
+          ` : html`
+            <div class="form-group">
+              <label for="ka-buchung-datum">Datum</label>
+              <input id="ka-buchung-datum" type="date" required value=${bDatum}
+                onInput=${e => setDatumStr(e.target.value)} onChange=${e => setDatumStr(e.target.value)} />
+            </div>
+            ${isAuv ? html`
+              <div style="margin-bottom:16px;padding:10px;background:var(--primary-light);border-radius:var(--radius)">
+                <strong>Klassen:</strong> ${auvKlassen.length ? `${auvKlassen.length} ausgewählt` : 'keine ausgewählt'}
+              </div>
+            ` : html`
+              <div class="form-group">
+                <label for="ka-buchung-klasse">Klasse</label>
+                <select id="ka-buchung-klasse" value=${bKlasse} onChange=${e => setKlasseSel(e.target.value)}>
+                  <option value="">— Klasse wählen —</option>
+                  ${KLASSEN.map(k => html`<option value=${k}>${k}</option>`)}
+                </select>
+              </div>
+            `}
+          `}
 
           <div class="form-group">
             <label>Art</label>
@@ -1153,6 +1180,16 @@ function Sidebar({ onClose, onPrint, onLogout }) {
   `;
 }
 
+// Weitere Buchung in einer schon belegten Zelle (FB-60). Der Tipp auf den
+// Eintrag bleibt beim Chip; die freie Fläche und dieses Plus öffnen eine neue Buchung.
+function WeitereBuchungButton({ date, klasse, onCellClick }) {
+  if (Store.readonly) return null;
+  const dk = dateKey(date);
+  return html`<button type="button" class="cell-add" title="Weitere Buchung"
+    aria-label=${'Weitere Buchung, Klasse ' + klasse + ', ' + dk}
+    onClick=${e => { e.stopPropagation(); onCellClick(date, klasse); }}>+</button>`;
+}
+
 // --- Main Calendar ---
 function CalendarView({ onCellClick, onChipClick, visibleKlassen }) {
   const [currentMonday, setCurrentMonday] = useState(getMonday(new Date()));
@@ -1224,7 +1261,7 @@ function CalendarView({ onCellClick, onChipClick, visibleKlassen }) {
               const warnWeek = kaCount >= maxKa;
 
               return html`
-                <div class="cal-cell" onClick=${() => buchungen.length === 0 && onCellClick(date, k)}>
+                <div class="cal-cell" onClick=${() => { if (!Store.readonly) onCellClick(date, k); }}>
                   ${buchungen.map(b => {
                     const exc = isExceptionBooking(b);
                     return html`
@@ -1235,6 +1272,7 @@ function CalendarView({ onCellClick, onChipClick, visibleKlassen }) {
                       <span class="chip-teacher">(${b.lehrkraft})</span>
                     </span>
                   `})}
+                  ${buchungen.length > 0 && html`<${WeitereBuchungButton} date=${date} klasse=${k} onCellClick=${onCellClick} />`}
                   ${warnWeek && buchungen.some(b => b.art === 'KA') ? html`<span class="warn-badge">!</span>` : ''}
                 </div>
               `;
@@ -1304,7 +1342,7 @@ function MonthView({ onCellClick, onChipClick, visibleKlassen }) {
               }
               const buchungen = Store.getBuchungenForDay(date, k);
               return html`
-                <div class="month-cell" onClick=${() => buchungen.length === 0 && onCellClick(date, k)}>
+                <div class="month-cell" onClick=${() => { if (!Store.readonly) onCellClick(date, k); }}>
                   ${buchungen.map(b => {
                     const exc = isExceptionBooking(b);
                     return html`
@@ -1315,6 +1353,7 @@ function MonthView({ onCellClick, onChipClick, visibleKlassen }) {
                       </span>
                     `;
                   })}
+                  ${buchungen.length > 0 && html`<${WeitereBuchungButton} date=${date} klasse=${k} onCellClick=${onCellClick} />`}
                 </div>
               `;
             })}
@@ -1540,7 +1579,7 @@ function QuarterView({ onCellClick, onChipClick, visibleKlassen }) {
               }
               const buchungen = Store.getBuchungenForDay(date, k);
               return html`
-                <div class="month-cell" onClick=${() => buchungen.length === 0 && onCellClick(date, k)}>
+                <div class="month-cell" onClick=${() => { if (!Store.readonly) onCellClick(date, k); }}>
                   ${buchungen.map(b => {
                     const exc = isExceptionBooking(b);
                     return html`
@@ -1551,6 +1590,7 @@ function QuarterView({ onCellClick, onChipClick, visibleKlassen }) {
                       </span>
                     `;
                   })}
+                  ${buchungen.length > 0 && html`<${WeitereBuchungButton} date=${date} klasse=${k} onCellClick=${onCellClick} />`}
                 </div>
               `;
             })}
@@ -1757,7 +1797,7 @@ function App() {
         </select>
         ${!Store.readonly && html`
         <button class="btn btn-sm btn-primary"
-          onClick=${() => setDialog({ datum: new Date(), klasse: filterKlasse !== 'alle' && !filterKlasse.startsWith('stufe') ? filterKlasse : '5a' })}>
+          onClick=${() => setDialog({ datum: new Date(), klasse: filterKlasse !== 'alle' && !filterKlasse.startsWith('stufe') ? filterKlasse : '' })}>
           + Neue Buchung
         </button>`}
         <div class="view-switcher">
