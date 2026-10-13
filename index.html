@@ -302,7 +302,7 @@ const CONFIG = {
   SUPABASE_URL: 'https://ooejsfixxiuobrpqgfqm.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZWpzZml4eGl1b2JycHFnZnFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMjQ5MDYsImV4cCI6MjA4OTYwMDkwNn0.GbAv-sB4B8nNE3IPfiYIjbkMKs0Aq03c_-TUcmFY_5s',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '2.8.3',
+  APP_VERSION: '2.8.4',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
   SCHOOL_YEAR: '2026/27',
   // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
@@ -499,16 +499,25 @@ function getFachGruppe(fachKuerzel) {
   return fach ? fach.gruppe : 'Nebenfach';
 }
 
-function getParallelGruppe(fachKuerzel) {
+// Ab dieser Klassenstufe ist Französisch Wahlpflichtfach neben Technik/AES (FB-62).
+// Französisch wird als `F` gebucht; ab dieser Stufe gilt `F` wie `F-WPF`.
+// Server-Gegenstück: ka_private.fach_parallelgruppe(p_fach, p_klasse)
+const WPF_FRANZOESISCH_AB_STUFE = 7;
+
+function getParallelGruppe(fachKuerzel, klasse) {
+  if (fachKuerzel === 'F') {
+    const stufe = klasse && KLASSEN_META[klasse] ? KLASSEN_META[klasse].stufe : 0;
+    return stufe >= WPF_FRANZOESISCH_AB_STUFE ? 'WPF' : null;
+  }
   const fach = FAECHER.find(f => f.kuerzel === fachKuerzel);
   return (fach && fach.parallelGruppe) || null;
 }
 
 // Zwei KA am selben Tag in derselben Klasse: verschiedene Fächer einer Parallelgruppe
-// (WPF: Te/AES/F-WPF, Rel/Eth) oder dasselbe Fach bei einer anderen Lehrkraft (G/M).
-function istParallelErlaubt(fachA, fachB) {
-  const g = getParallelGruppe(fachA);
-  return !!g && g === getParallelGruppe(fachB) && fachA !== fachB;
+// (WPF: Te/AES/F-WPF, ab Stufe 7 auch F; Rel/Eth) oder dasselbe Fach bei einer anderen Lehrkraft (G/M).
+function istParallelErlaubt(fachA, fachB, klasse) {
+  const g = getParallelGruppe(fachA, klasse);
+  return !!g && g === getParallelGruppe(fachB, klasse) && fachA !== fachB;
 }
 function istNiveauErlaubt(bestehend, buchung, anzahlGleicherFach) {
   const lehrkraftId = buchung.user_id || Store.user?.id;
@@ -518,7 +527,7 @@ function istNiveauErlaubt(bestehend, buchung, anzahlGleicherFach) {
 
 // Wochenzählung: Parallelgruppe oder dasselbe Fach am selben Tag = 1 Arbeit.
 function kaZaehlSchluessel(b) {
-  const g = getParallelGruppe(b.fach);
+  const g = getParallelGruppe(b.fach, b.klasse);
   return g ? `${b.datum}|${g}` : `${b.datum}|${b.fach}`;
 }
 
@@ -674,7 +683,7 @@ const Store = {
       );
       const anzahlGleicherFach = sameDay.filter(b => b.fach === buchung.fach).length;
       const existing = sameDay.filter(b =>
-        !istParallelErlaubt(b.fach, buchung.fach) &&
+        !istParallelErlaubt(b.fach, buchung.fach, klasse) &&
         !istNiveauErlaubt(b, buchung, anzahlGleicherFach)
       );
       if (existing.length >= 1) {
@@ -700,7 +709,7 @@ const Store = {
     if (buchung.art === 'KA') {
       const monday = getMonday(dk);
       const maxKa = 3;
-      const neuSchluessel = kaZaehlSchluessel({ ...buchung, datum: dk, id: excludeId || 'neu' });
+      const neuSchluessel = kaZaehlSchluessel({ ...buchung, klasse, datum: dk, id: excludeId || 'neu' });
       const weekCount = new Set(this.buchungen.filter(b => {
         if (b.id === excludeId) return false;
         if (b.klasse !== klasse) return false;
