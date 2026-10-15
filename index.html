@@ -302,7 +302,7 @@ const CONFIG = {
   SUPABASE_URL: 'https://ooejsfixxiuobrpqgfqm.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZWpzZml4eGl1b2JycHFnZnFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMjQ5MDYsImV4cCI6MjA4OTYwMDkwNn0.GbAv-sB4B8nNE3IPfiYIjbkMKs0Aq03c_-TUcmFY_5s',
   POLL_INTERVAL: 60000, // 60s Polling
-  APP_VERSION: '2.8.4',
+  APP_VERSION: '2.8.5',
   SCHOOL_NAME: 'Kurpfalz-Realschule Schriesheim',
   SCHOOL_YEAR: '2026/27',
   // Prüfungsdichte-Ampel: Gewichtung & Schwellen (frei anpassbar)
@@ -500,7 +500,8 @@ function getFachGruppe(fachKuerzel) {
 }
 
 // Ab dieser Klassenstufe ist Französisch Wahlpflichtfach neben Technik/AES (FB-62).
-// Französisch wird als `F` gebucht; ab dieser Stufe gilt `F` wie `F-WPF`.
+// Norbert hat das am 15.10.2026 bestätigt. Französisch wird als `F` gebucht;
+// ab dieser Stufe gilt `F` wie `F-WPF`.
 // Server-Gegenstück: ka_private.fach_parallelgruppe(p_fach, p_klasse)
 const WPF_FRANZOESISCH_AB_STUFE = 7;
 
@@ -545,29 +546,59 @@ function getBookingLabel(b, compact = false) {
 }
 
 function getBookingTitle(b) {
-  if (b.art === 'AuV') return `AuV – ${b.notiz || 'außerunterrichtliche Veranstaltung'} (${b.lehrkraft})`;
-  return `${b.fach} ${b.art} (${b.lehrkraft})${b.notiz ? ' – ' + b.notiz : ''}`;
+  const grund = abweichungsgrund(b);
+  const base = b.art === 'AuV'
+    ? `AuV – ${b.notiz || 'außerunterrichtliche Veranstaltung'} (${b.lehrkraft})`
+    : `${b.fach} ${b.art} (${b.lehrkraft})${b.notiz ? ' – ' + b.notiz : ''}`;
+  return grund ? `${base} – ${grund}` : base;
 }
 
-// Check if a booking is an exception (4th+ KA in a week for its class)
-// NVO: Nur reguläre KA zählen, Nachschreiber nicht
-function isExceptionBooking(buchung) {
-  if (buchung.art !== 'KA') return false; // Nur reguläre KA können Ausnahmen sein
+// Abweichung von der Schulregel: speichern bleibt möglich, der Eintrag wird markiert.
+// Nur reguläre KA. Nachschreiber, Wochenende und Ferien laufen über validate().
+function tagesKonfliktFaecher(buchung) {
+  if (!buchung || buchung.art !== 'KA' || !Store.buchungen) return [];
+  const sameDay = Store.buchungen.filter(b =>
+    b.datum === buchung.datum && b.klasse === buchung.klasse && b.art === 'KA' &&
+    b.id !== buchung.id && b.status !== 'storniert'
+  );
+  const anzahlGleicherFach = sameDay.filter(b => b.fach === buchung.fach).length;
+  return sameDay.filter(b =>
+    !istParallelErlaubt(b.fach, buchung.fach, buchung.klasse) &&
+    !istNiveauErlaubt(b, buchung, anzahlGleicherFach)
+  ).map(b => b.fach);
+}
+
+function istWochenAusnahme(buchung) {
+  if (!buchung || buchung.art !== 'KA') return false;
   const monday = getMonday(buchung.datum);
   const weekKAs = Store.buchungen.filter(b => {
-    if (b.klasse !== buchung.klasse) return false;
-    if (b.art !== 'KA') return false; // Nur reguläre KA zählen
-    const bMonday = getMonday(b.datum);
-    return dateKey(bMonday) === dateKey(monday);
-  }).sort((a,b) => {
-    // Sort by datum then erstellt_am to determine order
+    if (b.klasse !== buchung.klasse || b.art !== 'KA' || b.status === 'storniert') return false;
+    return dateKey(getMonday(b.datum)) === dateKey(monday);
+  }).sort((a, b) => {
     if (a.datum !== b.datum) return a.datum.localeCompare(b.datum);
     return (a.erstellt_am || '').localeCompare(b.erstellt_am || '');
   });
   const keys = [];
   weekKAs.forEach(b => { const k = kaZaehlSchluessel(b); if (!keys.includes(k)) keys.push(k); });
-  const idx = keys.indexOf(kaZaehlSchluessel(buchung));
-  return idx >= 3; // 4th or later = exception (0-indexed: 0,1,2 are ok, 3+ is exception)
+  return keys.indexOf(kaZaehlSchluessel(buchung)) >= 3;
+}
+
+function abweichungsgrund(buchung) {
+  if (!buchung || buchung.art !== 'KA') return '';
+  const faecher = tagesKonfliktFaecher(buchung);
+  const woche = istWochenAusnahme(buchung);
+  if (faecher.length && woche) {
+    return `Markiert: an diesem Tag liegt schon ${faecher.join(', ')}, und in der Woche sind es mehr als drei Klassenarbeiten. Die Eintragung bleibt stehen.`;
+  }
+  if (faecher.length) {
+    return `Markiert: an diesem Tag liegt schon ${faecher.join(', ')}. Die Schulregel wäre eine Klassenarbeit. Die Eintragung bleibt stehen.`;
+  }
+  if (woche) return 'Markiert: vierte oder weitere Klassenarbeit in dieser Woche. Die Eintragung bleibt stehen.';
+  return '';
+}
+
+function isExceptionBooking(buchung) {
+  return abweichungsgrund(buchung) !== '';
 }
 
 // ===== Data Store =====
@@ -675,11 +706,12 @@ const Store = {
       errors.push('Kein Termin am Wochenende möglich.');
     }
 
-    // 3. Max 1 KA per day per class — NUR reguläre KA, NICHT Nachschreiber.
-    // Ausnahme: Parallelgruppe (verschiedene Fächer) oder dasselbe Fach, andere Lehrkraft (G/M, höchstens zwei).
+    // 3. Eine KA pro Tag und Klasse ist die Schulregel, kein Sperrgrund.
+    // Erlaubt ohne Markierung: Parallelgruppe oder dasselbe Fach, andere Lehrkraft, höchstens zwei.
+    // Alles andere wird gespeichert und rot markiert.
     if (buchung.art === 'KA') {
       const sameDay = this.buchungen.filter(b =>
-        b.datum === dk && b.klasse === klasse && b.art === 'KA' && b.id !== excludeId
+        b.datum === dk && b.klasse === klasse && b.art === 'KA' && b.id !== excludeId && b.status !== 'storniert'
       );
       const anzahlGleicherFach = sameDay.filter(b => b.fach === buchung.fach).length;
       const existing = sameDay.filter(b =>
@@ -687,7 +719,7 @@ const Store = {
         !istNiveauErlaubt(b, buchung, anzahlGleicherFach)
       );
       if (existing.length >= 1) {
-        errors.push(`Bereits ${existing.length} Klassenarbeit(en) an diesem Tag in ${klasse}: ${existing.map(b => b.fach).join(', ')}`);
+        warnings.push(`In ${klasse} liegt an diesem Tag schon ${existing.map(b => b.fach).join(', ')}. Die Buchung wird gespeichert und rot markiert, weil die Schulregel eine Klassenarbeit pro Tag wäre.`);
       } else if (anzahlGleicherFach > 0) {
         warnings.push(`Im Fach ${buchung.fach} hat eine andere Lehrkraft in ${klasse} schon eine Klassenarbeit an diesem Tag. Für G- und M-Niveau ist das erlaubt.`);
       }
@@ -711,7 +743,7 @@ const Store = {
       const maxKa = 3;
       const neuSchluessel = kaZaehlSchluessel({ ...buchung, klasse, datum: dk, id: excludeId || 'neu' });
       const weekCount = new Set(this.buchungen.filter(b => {
-        if (b.id === excludeId) return false;
+        if (b.id === excludeId || b.status === 'storniert') return false;
         if (b.klasse !== klasse) return false;
         if (b.art !== 'KA') return false; // Nur reguläre KA zählen
         const bMonday = getMonday(b.datum);
@@ -1287,7 +1319,7 @@ function CalendarView({ onCellClick, onChipClick, visibleKlassen }) {
                     return html`
                     <span class="chip ${getChipClass(b.art, b.fach, exc)}"
                       onClick=${(e) => { e.stopPropagation(); onChipClick(b); }}
-                      title=${exc ? 'Ausnahme: 4+ KA in dieser Woche!' : getBookingTitle(b)}>
+                      title=${getBookingTitle(b)}>
                       ${exc ? '⚠ ' : ''}${getBookingLabel(b)}
                       <span class="chip-teacher">(${b.lehrkraft})</span>
                     </span>
@@ -1369,7 +1401,7 @@ function MonthView({ onCellClick, onChipClick, visibleKlassen }) {
                       <span class="month-chip ${getChipClass(b.art, b.fach, exc)}"
                         onClick=${(e) => { e.stopPropagation(); onChipClick(b); }}
                         title=${getBookingTitle(b)}>
-                        ${getBookingLabel(b, true)}
+                        ${exc ? '⚠ ' : ''}${getBookingLabel(b, true)}
                       </span>
                     `;
                   })}
@@ -1481,7 +1513,7 @@ function MonthCalendarView({ visibleKlassen, filterLehrkraft, onDayClick, onChip
         <span><i style="background:var(--ka-neben)"></i>KA Nebenfach</span>
         <span><i style="background:var(--gold)"></i>Test</span>
         <span><i style="background:var(--event)"></i>AuV</span>
-        <span><i style="background:var(--exception)"></i>Ausnahme (4+ KA/Woche)</span>
+        <span><i style="background:var(--exception)"></i>Markiert: weicht von der Schulregel ab</span>
       </div>
     </div>`;
 }
@@ -1606,7 +1638,7 @@ function QuarterView({ onCellClick, onChipClick, visibleKlassen }) {
                       <span class="month-chip ${getChipClass(b.art, b.fach, exc)}"
                         onClick=${(e) => { e.stopPropagation(); onChipClick(b); }}
                         title=${getBookingTitle(b)}>
-                        ${getBookingLabel(b, true)}
+                        ${exc ? '⚠ ' : ''}${getBookingLabel(b, true)}
                       </span>
                     `;
                   })}
@@ -1655,7 +1687,7 @@ function YearView({ onMonthClick, onDayClick, visibleKlassen }) {
         <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--ka-neben)"></div> KA Nebenfach</div>
         <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--gold)"></div> Test</div>
         <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--event)"></div> AuV</div>
-        <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--exception)"></div> Ausnahme (4+ KA/Woche)</div>
+        <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--exception)"></div> Markiert: weicht von der Schulregel ab</div>
         <div class="year-legend-item"><div class="year-legend-dot" style="background:var(--holiday)"></div> Ferien</div>
       </div>
 
